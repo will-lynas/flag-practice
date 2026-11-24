@@ -1,4 +1,4 @@
-import { loadProgress, saveProgress, getDue, nextDue, addFive, grade } from './engine.js';
+import { loadProgress, saveProgress, getDue, nextDue, addFive, getPracticeQueues, recordAttempt } from './engine.js';
 import { countries, countriesIn, regions, resolveCountry, searchCountries } from './countries.js';
 import { renderStats } from './stats.js';
 
@@ -105,7 +105,7 @@ function focusHeading(heading) {
 }
 
 function storageError(action, load = false) {
-  const retry = button('Try again', action);
+  const retry = button('Try again', () => { if (retry.isConnected) action(); });
   focusHeading(mount('error', load ? 'Couldn’t load progress' : 'Couldn’t save progress', '', retryRow(retry)));
 }
 
@@ -195,9 +195,9 @@ function showFeedback(country, stage, answer, correct) {
 
 function record(country, stage, answer) {
   const correct = answer === country.code;
-  const now = new Date();
+  const updated = recordAttempt(state, country.code, correct);
   function save() {
-    try { saveState(grade(state, country.code, correct, now)); }
+    try { saveState(updated); }
     catch { return storageError(save); }
     showFeedback(country, stage, answer, correct);
   }
@@ -235,7 +235,7 @@ function showRecall(country, stage, focus) {
   announcement.setAttribute('role', 'status');
   const submit = button('Submit', () => submitAnswer(), 'answer-action');
   const skip = button('Don’t know', () => {
-    if (!skip.disabled) record(country, stage, null);
+    if (!skip.disabled) answer(null);
   }, 'secondary');
   const actions = retryRow(submit);
   actions.append(skip);
@@ -246,6 +246,10 @@ function showRecall(country, stage, focus) {
   let matches = [];
   let active = -1;
   let composing = false;
+
+  function answer(code) {
+    if (form.isConnected) record(country, stage, code);
+  }
 
   function highlight(index) {
     if (active >= 0) list.children[active].setAttribute('aria-selected', 'false');
@@ -278,7 +282,7 @@ function showRecall(country, stage, focus) {
   }
 
   function choose(option) {
-    if (!submit.disabled && !composing) record(country, stage, option.code);
+    if (!submit.disabled && !composing) answer(option.code);
   }
 
   function suggest() {
@@ -335,7 +339,7 @@ function showRecall(country, stage, focus) {
   function submitAnswer(visibleFallback) {
     if (composing || submit.disabled) return;
     const chosen = resolveCountry(input.value) ?? visibleFallback;
-    if (chosen) return record(country, stage, chosen.code);
+    if (chosen) return answer(chosen.code);
     input.focus();
     if (list.hidden) suggest();
     input.setAttribute('aria-invalid', 'true');
@@ -349,11 +353,11 @@ function showRecall(country, stage, focus) {
 
 function showNext(focus = true) {
   const now = new Date();
-  const due = getDue(state, now, inScope);
+  const { due, retries } = getPracticeQueues(state, now, inScope);
   const reviews = due.filter(code => state.cards[code].last_review);
   if (reviews.length) return showRecall(byCode.get(reviews[0]), `Review · ${reviews.length} due`, focus);
-  // Ungraded FSRS cards are the durable queue; no separate cursor can drift.
   if (due.length) return showRecall(byCode.get(due[0]), `New · ${due.length} remaining`, focus);
+  if (retries.length) return showRecall(byCode.get(retries[0]), `Retry · ${retries.length} remaining`, focus);
   showIdle(focus, now);
 }
 

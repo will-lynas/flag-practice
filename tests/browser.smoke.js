@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
+import { createEmptyCard, fsrs, Rating, State } from 'ts-fsrs';
 import { addFive, grade } from '../src/engine.js';
 import { regionTests } from './regions.browser.js';
 import { statsTests } from './stats.browser.js';
@@ -114,8 +115,8 @@ async function recall(page, code) {
 
 test('guesses the first five without revealing answers, resumes on reload, and keeps FSRS history', async t => {
   const page = await open(t);
-  // Keep incorrect cards from becoming due mid-batch while the browser runs.
-  await page.clock.setFixedTime(new Date('2026-05-03T12:00:00Z'));
+  const now = new Date('2026-05-03T12:00:00Z');
+  await page.clock.setFixedTime(now);
   await button(page, 'Learn 5 flags').click();
   let input = await recall(page, 'us');
   const beforeFirstGuess = await stored(page);
@@ -167,12 +168,34 @@ test('guesses the first five without revealing answers, resumes on reload, and k
   await input.press('Enter');
   await heading(page, 'Correct: France');
   await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#trainer').getAttribute('data-screen'), 'recall',
+    'missed flags must come back without advancing the clock');
+  assert.equal(await button(page, 'Learn 5 more').count(), 0);
+  await recall(page, 'gb');
+  await page.reload();
+  input = await recall(page, 'gb');
+  await button(page, 'Don’t know').click();
+  await heading(page, 'Skipped: United Kingdom');
+  await page.keyboard.press('Enter');
+  input = await recall(page, 'jp');
+  await input.fill('Japan');
+  await input.press('Enter');
+  await heading(page, 'Correct: Japan');
+  await page.keyboard.press('Enter');
+  input = await recall(page, 'gb');
+  await input.fill('United Kingdom');
+  await input.press('Enter');
+  await heading(page, 'Correct: United Kingdom');
+  await page.keyboard.press('Enter');
   await heading(page, 'No reviews due');
   await button(page, 'Learn 5 more').waitFor();
   const finished = await stored(page);
-  const { cards, reviewLog } = JSON.parse(finished);
+  const { cards, reviewLog, reviewCountries } = JSON.parse(finished);
   assert.deepEqual(Object.keys(cards), firstFive);
-  assert.equal(reviewLog.length, 5);
+  assert.deepEqual(reviewLog, Array(8).fill(now.toISOString()));
+  assert.deepEqual(Object.values(reviewCountries), [...firstFive, 'GB', 'JP', 'GB']);
+  assert.deepEqual(cards.GB, afterSkip.cards.GB);
+  assert.deepEqual(cards.JP, afterSkip.cards.JP);
   assert.ok(Date.parse(cards.GB.due) < Date.parse(cards.US.due));
   assert.equal(await page.getByRole('link', { name: 'Stats', exact: true }).count(), 1);
   await page.reload();
@@ -185,6 +208,105 @@ test('guesses the first five without revealing answers, resumes on reload, and k
   await page.reload();
   await recall(page, 'gb');
   assert.equal(await button(page, 'Learn 5 more').count(), 0);
+});
+
+const retryClock = new Date('2026-05-03T12:00:00Z');
+const scheduler = fsrs({ enable_fuzz: false });
+
+async function dueFixture(page, cards) {
+  await page.clock.setFixedTime(retryClock);
+  const learned = new Date('2026-04-01T12:00:00Z');
+  const initial = scheduler.next(createEmptyCard(learned), learned, Rating.Good).card;
+  const review = scheduler.next(initial, initial.due, Rating.Good).card;
+  assert.equal(review.state, State.Review);
+  const bytes = JSON.stringify({ version: 1, cards: Object.fromEntries(
+    Object.entries(cards).map(([code, due]) => [code, { ...review, due }])) });
+  await page.evaluate(([key, value]) => {
+    localStorage.setItem(key, value);
+    localStorage.setItem('flag-trainer.ui.region', 'europe');
+  }, [progressKey, bytes]);
+  await page.reload();
+  return review;
+}
+
+test('due reviews retry after the remaining due flags without leaking across regions or pulling future flags', async t => {
+  const page = await open(t);
+  const futureDue = new Date('2026-05-10T12:00:00Z');
+  const review = await dueFixture(page, { GB: retryClock, FR: retryClock, JP: retryClock, DE: futureDue });
+  const picker = page.getByLabel('Region');
+  await recall(page, 'gb');
+  await button(page, 'Don’t know').click();
+  await heading(page, 'Skipped: United Kingdom');
+  const missed = JSON.parse(await stored(page));
+  const lapse = scheduler.next({ ...review, due: retryClock }, retryClock, Rating.Again).card;
+  assert.equal(lapse.state, State.Relearning);
+  assert.equal(lapse.lapses, review.lapses + 1);
+  assert.deepEqual(missed.cards.GB, JSON.parse(JSON.stringify(lapse)));
+  assert.deepEqual(missed.reviewLog, [retryClock.toISOString()]);
+
+  await picker.selectOption('asia');
+  await flag(page, 'jp', 'Flag to identify');
+  await picker.selectOption('europe');
+  await flag(page, 'fr', 'Flag to identify');
+  await page.reload();
+  let input = await recall(page, 'fr');
+  await input.fill('France');
+  await input.press('Enter');
+  await heading(page, 'Correct: France');
+  await button(page, 'Next').click();
+  assert.equal(await page.locator('#trainer').getAttribute('data-screen'), 'recall');
+  assert.equal(await button(page, 'Learn 5 more').count(), 0);
+  input = await recall(page, 'gb');
+
+  const beforeRetry = new Date(lapse.due.getTime() - 1);
+  await page.clock.setFixedTime(beforeRetry);
+  await input.fill('United Kingdom');
+  await input.press('Enter');
+  await heading(page, 'Correct: United Kingdom');
+  await button(page, 'Next').click();
+  await heading(page, 'No reviews due');
+  const finished = JSON.parse(await stored(page));
+  assert.deepEqual(finished.cards.GB, missed.cards.GB);
+  assert.deepEqual(finished.cards.DE, missed.cards.DE);
+  assert.deepEqual(finished.cards.JP, missed.cards.JP);
+  assert.deepEqual(finished.reviewLog, [retryClock, retryClock, beforeRetry].map(at => at.toISOString()));
+  assert.deepEqual(Object.values(finished.reviewCountries), ['GB', 'FR', 'GB']);
+});
+
+test('a singleton retry is immediate and an already-due retry is graded just once', async t => {
+  const page = await open(t);
+  await dueFixture(page, { GB: retryClock });
+  let input = await recall(page, 'gb');
+  await input.fill('France');
+  await input.press('Enter');
+  await heading(page, 'Not quite: United Kingdom');
+  const missed = JSON.parse(await stored(page)).cards.GB;
+  await button(page, 'Next').click();
+  assert.equal(await page.locator('#trainer').getAttribute('data-screen'), 'recall');
+  await recall(page, 'gb');
+  await button(page, 'Don’t know').click();
+  await heading(page, 'Skipped: United Kingdom');
+  await page.reload(); // Persisted even before pressing Next on the miss.
+  await recall(page, 'gb');
+  assert.deepEqual(JSON.parse(await stored(page)).cards.GB, missed);
+
+  const due = new Date(missed.due);
+  await page.clock.setFixedTime(due);
+  await page.reload();
+  input = await recall(page, 'gb');
+  assert.equal(await page.locator('.stage').textContent(), 'Retry · 1 remaining');
+  await input.fill('United Kingdom');
+  await input.press('Enter');
+  await heading(page, 'Correct: United Kingdom');
+  await button(page, 'Next').click();
+  await heading(page, 'No reviews due');
+  const finished = JSON.parse(await stored(page));
+  const expected = scheduler.next({ ...missed, due, last_review: retryClock }, due, Rating.Good).card;
+  assert.deepEqual(finished.cards.GB, JSON.parse(JSON.stringify(expected)));
+  assert.equal(finished.cards.GB.reps, missed.reps + 1);
+  assert.equal(finished.cards.GB.lapses, missed.lapses);
+  assert.deepEqual(finished.reviewLog, [retryClock, retryClock, due].map(at => at.toISOString()));
+  assert.deepEqual(Object.values(finished.reviewCountries), ['GB', 'GB', 'GB']);
 });
 
 test('Enter submits the only visible partial match without highlighting it', async t => {
@@ -267,30 +389,40 @@ test('submits an exact normalized country code without needing a suggestion', as
   await heading(page, 'Correct: United States');
 });
 
-test('a failed progress write does not advance or double-count a review on retry', { skip: !!base }, async t => {
+test('a failed miss write saves the grade, retry and history together exactly once', { skip: !!base }, async t => {
   const page = await open(t);
   await button(page, 'Learn 5 flags').click();
   const input = await recall(page, 'us');
   const before = await stored(page);
   await page.evaluate(key => {
     const setItem = Storage.prototype.setItem;
+    let failOnce = true;
+    window.progressWrites = 0;
     Storage.prototype.setItem = function (name, value) {
       if (name === key) {
-        Storage.prototype.setItem = setItem;
-        throw new DOMException('Test write refusal', 'QuotaExceededError');
+        if (failOnce) {
+          failOnce = false;
+          throw new DOMException('Test write refusal', 'QuotaExceededError');
+        }
+        window.progressWrites++;
       }
       return setItem.call(this, name, value);
     };
   }, progressKey);
-  await input.fill('United States');
+  await input.fill('Canada');
   await input.press('Enter');
   await heading(page, 'Couldn’t save progress');
   assert.equal(await stored(page), before);
-  await button(page, 'Try again').click();
-  await heading(page, 'Correct: United States');
+  await button(page, 'Try again').evaluate(control => { control.click(); control.click(); });
+  await heading(page, 'Not quite: United States');
+  assert.equal(await page.evaluate(() => window.progressWrites), 1);
+  const saved = JSON.parse(await stored(page));
+  assert.equal(saved.cards.US.reps, 1);
+  assert.deepEqual(saved.retryQueue, ['US']);
+  assert.equal(saved.reviewLog.length, 1);
   await page.reload();
   await recall(page, 'gb');
-  assert.equal(JSON.parse(await stored(page)).reviewLog.length, 1);
+  assert.deepEqual(JSON.parse(await stored(page)), saved);
 });
 
 test('reload resumes from saved grades without writing a separate batch cursor', { skip: !!base }, async t => {

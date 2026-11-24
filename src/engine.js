@@ -42,6 +42,14 @@ export function loadProgress({ strict = false } = {}) {
           else if (strict) throw new Error('Invalid saved card');
         }
         const state = { ...data, cards: Object.fromEntries(cards) };
+        if (data.retryQueue !== undefined) {
+          const queue = Array.isArray(data.retryQueue) ? data.retryQueue : [];
+          state.retryQueue = [...new Set(queue.filter(code =>
+            typeof code === 'string' && Object.hasOwn(state.cards, code) && state.cards[code].last_review))];
+          if (strict && (!Array.isArray(data.retryQueue) || state.retryQueue.length !== queue.length)) {
+            throw new Error('Invalid retry queue');
+          }
+        }
         // Older saves have schedules but no attempt history to backfill.
         if (Array.isArray(data.reviewLog)) {
           state.reviewLog = data.reviewLog.filter((at) =>
@@ -96,6 +104,15 @@ export function getDue(state, now = new Date(), allowed) {
     .map(([code]) => code);
 }
 
+export function getPracticeQueues(state, now, allowed) {
+  const pending = new Set(state.retryQueue);
+  return {
+    // A pending retry keeps its FIFO slot even if its scheduled due time arrives.
+    due: getDue(state, now, allowed).filter(code => !pending.has(code)),
+    retries: [...pending].filter(code => !allowed || allowed.has(code)),
+  };
+}
+
 export function nextDue(state, allowed) {
   let earliest = null;
   for (const [code, { due }] of Object.entries(state.cards)) {
@@ -134,11 +151,29 @@ export function grade(state, code, correct, now = new Date()) {
   if (!Object.hasOwn(state.cards, code)) return state;
   const rating = correct ? Rating.Good : Rating.Again;
   const { card } = scheduler.next(state.cards[code], new Date(now), rating);
+  return logAttempt({ ...state, cards: { ...state.cards, [code]: card } }, code, now);
+}
+
+export function recordAttempt(state, code, correct, now = new Date()) {
+  if (!Object.hasOwn(state.cards, code)) return state;
+  const queue = state.retryQueue ?? [];
+  const retry = queue.includes(code);
+  // Early retries are practice only. If already due, this one attempt also fulfills
+  // the scheduled review; never replace the original Again or grade the click twice.
+  const updated = !retry || state.cards[code].due <= now
+    ? grade(state, code, correct, now)
+    : logAttempt(state, code, now);
+  if (correct && !retry) return updated;
+  const retryQueue = queue.filter(item => item !== code);
+  if (!correct) retryQueue.push(code);
+  return { ...updated, retryQueue };
+}
+
+function logAttempt(state, code, now) {
   const log = state.reviewLog ?? [];
   return {
     ...state,
-    cards: { ...state.cards, [code]: card },
-    reviewLog: [...log, card.last_review.toISOString()],
+    reviewLog: [...log, new Date(now).toISOString()],
     // Sparse annotations leave v1 timestamps readable by older builds and never guess older countries.
     reviewCountries: { ...state.reviewCountries, [log.length]: code },
   };
