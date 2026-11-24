@@ -1,4 +1,5 @@
 import { renderHeatmap } from './heatmap.js';
+import { completedCalendar, dueCalendar } from './review-calendar-data.js';
 import { getHeatmapData } from './engine.js';
 import { countriesIn } from './countries.js';
 import { getStats, statuses } from './stats-data.js';
@@ -43,9 +44,9 @@ export function renderStats(state, region, now = new Date()) {
     summary.append(metric);
   }
 
-  const calendar = element('div', null, 'stats-calendar');
+  const calendars = element('div', null, 'stats-calendars');
   const allowed = new Set(countriesIn(region).map(country => country.code));
-  const data = getHeatmapData(state, allowed, { includeUnassigned: region === 'world' });
+  const { reviews, due } = getHeatmapData(state, allowed, { includeUnassigned: region === 'world' });
 
   const regional = table('Regional breakdown', ['Region', ...statuses, 'Total']);
   regional.node.classList.add('stats-table--breakdown');
@@ -75,8 +76,16 @@ export function renderStats(state, region, now = new Date()) {
     } else next.textContent = '—';
   }
   const content = element('div', null, 'stats-content');
-  content.append(summary, calendar);
+  content.append(summary, calendars);
   if (region === 'world') content.append(regional.node);
   content.append(countries.node);
-  return { content, renderCalendar: () => renderHeatmap(calendar, data, now) };
+  return { content, renderCalendar: () => {
+    let clearActive;
+    const activate = clear => {
+      if (clearActive !== clear) clearActive?.();
+      clearActive = clear;
+    };
+    renderHeatmap(calendars, completedCalendar(reviews, now), activate);
+    renderHeatmap(calendars, dueCalendar(due, now), activate);
+  } };
 }

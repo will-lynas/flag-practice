@@ -9,6 +9,7 @@ const regionKey = 'flag-trainer.ui.region';
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 let state;
+let practiceRestored = false;
 let screen;
 let wakeTimer;
 let region = 'world';
@@ -376,23 +377,28 @@ function renderView(focus) {
     if (focus) focusHeading(heading);
     return;
   }
+  if (!practiceRestored) {
+    let legacy;
+    try { legacy = readPending(); }
+    catch { return storageError(() => renderView(true), true); }
+    // A v1 batch could be saved before its cards were enrolled. Only Practice owns recovery.
+    const restored = addFive(state, legacy?.codes ?? []);
+    if (restored !== state) {
+      try { saveState(restored); }
+      catch { return storageError(() => init(true)); }
+    }
+    practiceRestored = true;
+  }
   showNext(focus);
 }
 
 function init(focus = true) {
-  let legacy;
   try {
     selectRegion(localStorage.getItem(regionKey));
     state = undefined;
     state = loadProgress({ strict: true });
-    legacy = readPending();
   } catch { return storageError(() => init(true), true); }
-  // v1 could persist the batch just before its enrollment write.
-  const restored = addFive(state, legacy?.codes ?? []);
-  if (restored !== state) {
-    try { saveState(restored); }
-    catch { state = undefined; return storageError(() => init(true)); }
-  }
+  practiceRestored = false;
   renderView(focus);
 }
 

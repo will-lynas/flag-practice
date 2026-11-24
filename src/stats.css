@@ -31,12 +31,9 @@
 .stats-summary div { display: flex; flex-direction: column-reverse; }
 .stats-summary dt { font-size: .8125rem; color: var(--muted); }
 .stats-summary dd { margin: 0; font-size: 1.4rem; font-weight: 700; }
-.stats-calendar { min-inline-size: 0; }
-.stats-calendar .flag-heatmap { --flag-heatmap-color-scheme: inherit; max-inline-size: 26rem; background: transparent; }
-.stats-calendar .flag-heatmap__tile { min-block-size: 0; }
-.stats-calendar .flag-heatmap__tile:hover:not([data-period='today']) { background-color: var(--completed, var(--empty)); }
-.stats-calendar .flag-heatmap__tile[data-period='future']:hover { background-color: var(--due, var(--future-empty)); }
-.stats-calendar .flag-heatmap__page { min-block-size: 2.5rem; }
+.stats-calendars { display: grid; gap: 1.4rem; min-inline-size: 0; }
+.stats-calendars .flag-heatmap { --flag-heatmap-color-scheme: inherit; max-inline-size: 26rem; background: transparent; }
+.stats-calendars .flag-heatmap__page { min-block-size: 2.5rem; }
 
 .stats-table { inline-size: 100%; border-collapse: collapse; table-layout: fixed; font-size: .9rem; }
 .stats-table caption { text-align: start; font-size: 1rem; font-weight: 700; margin-block-end: .4rem; }

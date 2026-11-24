@@ -1,4 +1,5 @@
-const DAY_MS = 86_400_000;
+import { civilDate } from './review-calendar-data.js';
+
 const WEEKS = 13;
 const DAYS = WEEKS * 7;
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -9,60 +10,10 @@ const monthName = new Intl.DateTimeFormat('en', { month: 'short', timeZone: 'UTC
 const rangeDate = new Intl.DateTimeFormat('en', {
   year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC',
 });
+const level = count => count === 0 ? 0 : count < 5 ? 1 : count < 15 ? 2 : count < 30 ? 3 : 4;
 
-// Represent each local calendar date as a UTC civil-day ordinal, not an elapsed local day.
-const civilDate = day => new Date(day * DAY_MS);
-function civilDay(year, month, date) {
-  return new Date(0).setUTCFullYear(year, month, date) / DAY_MS;
-}
-const localDay = date => civilDay(date.getFullYear(), date.getMonth(), date.getDate());
-
-function parseEntry(at) {
-  if (typeof at !== 'string' && Object.prototype.toString.call(at) !== '[object Date]') return null;
-  if (typeof at === 'string') {
-    const parts = /^(\d{4})-(\d{2})-(\d{2})(?=$|T)/.exec(at);
-    if (parts) {
-      const [, year, month, date] = parts;
-      const day = civilDay(+year, month - 1, +date);
-      if (civilDate(day).toISOString().slice(0, 10) !== parts[0]) return null;
-      // A bare YYYY-MM-DD is already a local calendar date, not midnight UTC.
-      if (at === parts[0]) return { day, time: null };
-    }
-  }
-  const date = new Date(at);
-  return Number.isFinite(+date) ? { day: localDay(date), time: +date } : null;
-}
-
-function countDays(entries, bucket) {
-  const counts = new Map();
-  for (const entry of entries) {
-    const value = parseEntry(entry?.at);
-    if (!value) continue;
-    const day = bucket(value);
-    if (day !== null) counts.set(day, (counts.get(day) ?? 0) + 1);
-  }
-  return counts;
-}
-
-function level(count) {
-  return count === 0 ? 0 : count < 5 ? 1 : count < 15 ? 2 : count < 30 ? 3 : 4;
-}
-
-/**
- * Render into a dedicated container. Load heatmap.css separately in the parent.
- * Call again with the latest snapshot after grading or rescheduling, or at local midnight.
- * `reviews` contains one row per graded attempt; `due` contains one current row per card.
- * Dates or ISO timestamps are bucketed in the browser's local calendar; a due date before
- * today counts toward today's remaining and overdue, not any historical cell.
- */
-export function renderHeatmap(container, { reviews, due }, now = new Date()) {
-  const today = localDay(now);
-  const attempts = countDays(reviews, ({ day, time }) =>
-    day <= today && (time === null || time <= +now) ? day : null);
-  const scheduled = countDays(due, ({ day }) => day);
-  let overdue = 0;
-  for (const [day, count] of scheduled) if (day < today) overdue += count;
-
+export function renderHeatmap(container, { kind, today, counts, overdue }, activate) {
+  const isDue = kind === 'due';
   const doc = container.ownerDocument;
   function el(tag, className, text) {
     const node = doc.createElement(tag);
@@ -76,19 +27,29 @@ export function renderHeatmap(container, { reviews, due }, now = new Date()) {
     if (label) node.setAttribute('aria-label', label);
     return node;
   }
-  function counts(day) {
-    const done = attempts.get(day) ?? 0;
-    const pending = day < today ? 0 : (scheduled.get(day) ?? 0) + (day === today ? overdue : 0);
-    const text = day < today ? `${done} ${done === 1 ? 'attempt' : 'attempts'}`
-      : day > today ? `${pending} ${pending === 1 ? 'card' : 'cards'} due`
-      : `${done} completed · ${pending} remaining (${overdue} overdue)`;
-    return { done, pending, text };
+  function countLabel(day) {
+    const count = counts.get(day) ?? 0;
+    if (!isDue) return `${count} ${count === 1 ? 'attempt' : 'attempts'}`;
+    const label = `${count} ${count === 1 ? 'card' : 'cards'} due`;
+    return day === today ? `${label} (${overdue} overdue)` : label;
   }
 
   const root = el('section');
   root.className = 'flag-heatmap';
+  root.dataset.calendar = kind;
   const header = el('header', 'header');
-  const title = el('h2', 'title', 'Review activity');
+  const title = el('h3', 'title', isDue ? 'Reviews due' : 'Completed reviews');
+  title.id = `reviews-${kind}-title`;
+  root.setAttribute('aria-labelledby', title.id);
+  root.append(header);
+  container.append(root);
+  if (!counts.size) {
+    header.append(title);
+    root.append(el('p', 'empty', isDue ? 'No reviews due.' : 'No completed reviews recorded.'));
+    root.addEventListener('pointerover', () => activate());
+    return;
+  }
+
   const range = el('div', 'range');
   range.setAttribute('role', 'status');
   const heading = el('div');
@@ -101,31 +62,39 @@ export function renderHeatmap(container, { reviews, due }, now = new Date()) {
   header.append(heading, nav);
 
   const viewport = el('div', 'viewport');
-  viewport.tabIndex = -1;
   const grid = el('table', 'grid');
   grid.setAttribute('role', 'grid');
-  grid.setAttribute('aria-label', 'Review calendar');
+  grid.setAttribute('aria-labelledby', title.id);
   grid.setAttribute('aria-description', 'Arrow keys move by day or week. Page Up and Page Down change the range.');
   viewport.append(grid);
   const detail = el('div', 'detail');
-  const legend = el('ul', 'legend');
-  for (const [label, scale] of [['Completed', 'completed'], ['Due', 'due'], ['Today', 'today']]) {
-    const item = el('li', 'key', label);
-    const swatches = el('span', 'swatches');
-    swatches.setAttribute('aria-hidden', 'true');
-    for (let intensity = 1; intensity <= (scale === 'today' ? 1 : 4); intensity++) {
-      const swatch = el('span', 'swatch');
-      swatch.dataset[scale] = intensity;
-      swatch.title = scale === 'today' ? 'Today' : ['1–4', '5–14', '15–29', '30+'][intensity - 1];
-      swatches.append(swatch);
-    }
-    if (scale !== 'today') swatches.title = 'Lighter to darker: fewer to more';
-    item.append(swatches);
-    legend.append(item);
+  const legend = el('div', 'legend');
+  const key = el('span', 'key', 'Fewer');
+  const swatches = el('span', 'swatches');
+  swatches.setAttribute('aria-hidden', 'true');
+  for (const [index, label] of ['1–4', '5–14', '15–29', '30+'].entries()) {
+    const swatch = el('span', 'swatch');
+    swatch.dataset.level = index + 1;
+    swatch.title = label;
+    swatches.append(swatch);
   }
-  root.append(header, viewport, detail, legend);
+  key.append(swatches, 'More');
+  const todayKey = el('span', 'key', 'Today');
+  const todaySwatch = el('span', 'swatch');
+  todaySwatch.dataset.today = '';
+  todaySwatch.setAttribute('aria-hidden', 'true');
+  todayKey.prepend(todaySwatch);
+  legend.append(key, todayKey);
+  root.append(viewport, detail, legend);
 
-  const home = today - (civilDate(today).getUTCDay() + 6) % 7 - 8 * 7;
+  // Put today in the last week of history and the first week of the schedule.
+  const monday = today - (civilDate(today).getUTCDay() + 6) % 7;
+  const home = isDue ? monday : monday - (WEEKS - 1) * 7;
+  const pageStart = day => home + Math.floor((day - home) / DAYS) * DAYS;
+  let edge = today;
+  for (const day of counts.keys()) edge = isDue ? Math.max(edge, day) : Math.min(edge, day);
+  const earliest = isDue ? today : pageStart(edge);
+  const latest = isDue ? pageStart(edge) + DAYS - 1 : today;
   const tiles = new Map();
   let first = home;
   let active = today;
@@ -134,7 +103,7 @@ export function renderHeatmap(container, { reviews, due }, now = new Date()) {
   function showDetail() {
     const day = hovered ?? focused ?? pinned ?? (first === home ? today : undefined);
     detail.textContent = day === undefined ? ''
-      : `${day === today ? 'Today' : fullDate.format(civilDate(day))}: ${counts(day).text}`;
+      : `${day === today ? 'Today' : fullDate.format(civilDate(day))}: ${countLabel(day)}`;
   }
 
   function setActive(day) {
@@ -145,16 +114,34 @@ export function renderHeatmap(container, { reviews, due }, now = new Date()) {
   }
 
   function reveal(tile) {
+    if (tile.parentElement.cellIndex === 1) {
+      viewport.scrollLeft = 0;
+      return;
+    }
     const { left, right } = viewport.getBoundingClientRect();
     const box = tile.getBoundingClientRect();
-    if (box.left < left + 3) viewport.scrollLeft -= left + 3 - box.left;
-    else if (box.right > right - 3) viewport.scrollLeft += box.right - right + 3;
+    if (box.left < left + 3) viewport.scrollLeft -= Math.ceil(left + 3 - box.left);
+    else if (box.right > right - 3) viewport.scrollLeft += Math.ceil(box.right - right + 3);
   }
 
   function clearPin() {
     if (pinned !== undefined) tiles.get(pinned).setAttribute('aria-pressed', 'false');
     pinned = undefined;
   }
+
+  function clearDetail() {
+    clearPin();
+    hovered = focused = undefined;
+    showDetail();
+  }
+
+  root.addEventListener('pointerover', event => {
+    if (event.pointerType !== 'touch') activate(clearDetail);
+  });
+  root.addEventListener('focusin', () => activate(clearDetail));
+  root.addEventListener('focusout', event => {
+    if (!root.contains(event.relatedTarget)) clearDetail();
+  });
 
   function renderPage() {
     const head = el('thead');
@@ -163,40 +150,43 @@ export function renderHeatmap(container, { reviews, due }, now = new Date()) {
     monthRow.append(el('td', 'weekday'));
     let month;
     for (let week = 0; week < WEEKS; week++) {
-      // A week that contains the start of a new month carries that month's label.
-      const date = civilDate(first + week * 7 + (week === 0 ? 0 : 6));
-      const changed = date.getUTCMonth() !== month;
+      const start = Math.max(first + week * 7, earliest);
+      const end = Math.min(first + week * 7 + 6, latest);
+      // A week that contains a month boundary carries the new month's label.
+      const date = civilDate(month === undefined ? start : end);
+      const changed = start <= end && date.getUTCMonth() !== month;
       monthRow.append(el('td', 'month', changed ? monthName.format(date) : ''));
-      month = date.getUTCMonth();
+      if (start <= end) month = date.getUTCMonth();
     }
     head.append(monthRow);
     const body = el('tbody');
     tiles.clear();
     for (const [weekday, name] of WEEKDAYS.entries()) {
       const row = el('tr');
-      const heading = el('th', 'weekday', [0, 2, 4, 6].includes(weekday) ? name.slice(0, 3) : '');
-      heading.scope = 'row';
-      heading.setAttribute('aria-label', name);
-      row.append(heading);
+      const label = el('th', 'weekday', [0, 2, 4, 6].includes(weekday) ? name.slice(0, 3) : '');
+      label.scope = 'row';
+      label.setAttribute('aria-label', name);
+      row.append(label);
       for (let week = 0; week < WEEKS; week++) {
         const day = first + week * 7 + weekday;
+        const cell = el('td');
+        row.append(cell);
+        if (day < earliest || day > latest) continue;
         const date = civilDate(day);
-        const { done, pending, text } = counts(day);
-        const tile = button('', 'tile', `${fullDate.format(date)}: ${text}`);
+        const tile = button('', 'tile', `${fullDate.format(date)}: ${countLabel(day)}`);
         tile.dataset.date = date.toISOString().split('T')[0];
-        tile.dataset.completed = level(done);
-        tile.dataset.due = level(pending);
-        tile.dataset.period = day < today ? 'past' : day > today ? 'future' : 'today';
+        tile.dataset.level = level(counts.get(day) ?? 0);
         tile.tabIndex = day === active ? 0 : -1;
         tile.setAttribute('aria-pressed', 'false');
         if (day === today) tile.setAttribute('aria-current', 'date');
-        const cell = el('td');
         cell.append(tile);
-        row.append(cell);
         tiles.set(day, tile);
 
+        let pointerType;
+        tile.addEventListener('pointerdown', event => { pointerType = event.pointerType; });
         tile.addEventListener('pointerover', event => {
           if (event.pointerType === 'touch') return;
+          focused = undefined;
           hovered = day;
           showDetail();
         });
@@ -204,10 +194,10 @@ export function renderHeatmap(container, { reviews, due }, now = new Date()) {
           if (hovered === day) hovered = undefined;
           showDetail();
         });
-        tile.addEventListener('pointerdown', () => { focused = undefined; });
         tile.addEventListener('focus', () => {
           setActive(day);
           if (tile.matches(':focus-visible')) {
+            reveal(tile);
             hovered = undefined;
             focused = day;
             showDetail();
@@ -217,14 +207,17 @@ export function renderHeatmap(container, { reviews, due }, now = new Date()) {
           focused = undefined;
           showDetail();
         });
-        tile.addEventListener('click', () => {
+        tile.addEventListener('click', event => {
+          activate(clearDetail);
           setActive(day);
           const toggleOff = pinned === day;
           clearPin();
-          if (!toggleOff) {
+          // Mouse details follow the pointer; tap or keyboard activation can pin a date.
+          if (!toggleOff && ((event.pointerType || pointerType) === 'touch' || event.detail === 0)) {
             pinned = day;
             tile.setAttribute('aria-pressed', 'true');
           }
+          pointerType = undefined;
           if (!tile.matches(':focus-visible')) focused = undefined;
           showDetail();
         });
@@ -232,12 +225,18 @@ export function renderHeatmap(container, { reviews, due }, now = new Date()) {
       body.append(row);
     }
     grid.replaceChildren(head, body);
-    range.textContent = rangeDate.formatRange(civilDate(first), civilDate(first + DAYS - 1));
+    const start = Math.max(first, earliest);
+    const end = Math.min(first + DAYS - 1, latest);
+    range.textContent = rangeDate.formatRange(civilDate(start), civilDate(end));
+    prev.setAttribute('aria-disabled', String(start === earliest));
+    next.setAttribute('aria-disabled', String(end === latest));
     showDetail();
   }
 
   function showDay(day, moveFocus = false) {
-    const start = home + Math.floor((day - home) / DAYS) * DAYS;
+    day = Math.min(latest, Math.max(earliest, day));
+    if (day === active && moveFocus) return;
+    const start = pageStart(day);
     if (start !== first) {
       first = start;
       active = day;
@@ -256,13 +255,15 @@ export function renderHeatmap(container, { reviews, due }, now = new Date()) {
     reveal(tile);
   }
 
-  prev.addEventListener('click', () => showDay(active - DAYS));
-  next.addEventListener('click', () => showDay(active + DAYS));
+  prev.addEventListener('click', () => {
+    if (prev.getAttribute('aria-disabled') === 'false') showDay(active - DAYS);
+  });
+  next.addEventListener('click', () => {
+    if (next.getAttribute('aria-disabled') === 'false') showDay(active + DAYS);
+  });
   reset.addEventListener('click', () => {
-    clearPin();
-    hovered = focused = undefined;
+    clearDetail();
     showDay(today);
-    showDetail();
   });
   grid.addEventListener('keydown', event => {
     if (event.defaultPrevented || event.isComposing || event.altKey || event.metaKey || event.shiftKey) return;
@@ -279,13 +280,10 @@ export function renderHeatmap(container, { reviews, due }, now = new Date()) {
       showDay(moves[event.key], true);
     } else if (event.key === 'Escape' && (pinned !== undefined || focused !== undefined || hovered !== undefined)) {
       event.preventDefault();
-      clearPin();
-      hovered = focused = undefined;
-      showDetail();
+      clearDetail();
     }
   });
 
   renderPage();
-  container.replaceChildren(root);
   reveal(tiles.get(today));
 }
