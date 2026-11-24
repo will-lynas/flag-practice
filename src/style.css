@@ -1,3 +1,6 @@
+@import './heatmap.css';
+@import './stats.css';
+
 :root {
   color-scheme: light;
   font: 100%/1.5 system-ui, sans-serif;

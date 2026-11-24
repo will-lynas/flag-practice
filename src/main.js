@@ -1,5 +1,6 @@
 import { loadProgress, saveProgress, getDue, nextDue, addFive, grade } from './engine.js';
 import { countries, countriesIn, regions, resolveCountry, searchCountries } from './countries.js';
+import { renderStats } from './stats.js';
 
 const app = document.querySelector('#trainer');
 const byCode = new Map(countries.map(country => [country.code, country]));
@@ -38,7 +39,26 @@ function element(tag, text, className) {
 const picker = element('select', '', 'region-picker');
 picker.setAttribute('aria-label', 'Region');
 for (const { id, label } of regions) picker.add(new Option(label, id));
-document.querySelector('.site-header').append(picker);
+const nav = element('nav', '', 'site-nav');
+nav.setAttribute('aria-label', 'Main');
+for (const [label, path] of [['Practice', '/'], ['Stats', '/stats']]) {
+  const link = element('a', label);
+  link.href = path;
+  link.addEventListener('click', event => {
+    if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    event.preventDefault();
+    if (currentPath() === path) return;
+    history.pushState(null, '', path);
+    renderView(true);
+  });
+  nav.append(link);
+}
+const header = document.querySelector('.site-header');
+const tools = element('div', '', 'site-tools');
+tools.append(nav, picker);
+header.append(tools);
+const currentPath = () => /^\/stats\/?$/.test(location.pathname) ? '/stats' : '/';
+window.addEventListener('popstate', () => renderView(true));
 
 function selectRegion(id) {
   region = regions.some(item => item.id === id) ? id : 'world';
@@ -333,7 +353,20 @@ function showNext(focus = true) {
 }
 
 function renderView(focus) {
+  const path = currentPath();
+  for (const link of nav.children) {
+    if (link.pathname === path) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
+  document.title = path === '/stats' ? 'Stats | Flag Practice' : 'Flag Practice';
   if (!state) return init(focus);
+  if (path === '/stats') {
+    const { content, renderCalendar } = renderStats(state, region);
+    const heading = mount('stats', 'Stats', '', content);
+    renderCalendar();
+    if (focus) focusHeading(heading);
+    return;
+  }
   showNext(focus);
 }
 
@@ -360,7 +393,7 @@ function plainKey(event) {
 }
 
 app.addEventListener('keydown', event => {
-  if (event.key === 'Enter' && event.repeat && plainKey(event)) event.preventDefault();
+  if (screen !== 'stats' && event.key === 'Enter' && event.repeat && plainKey(event)) event.preventDefault();
 });
 
 function refreshIdle() {

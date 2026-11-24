@@ -1,0 +1,64 @@
+.site-tools, .site-nav {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+}
+
+.site-tools { flex-wrap: wrap; }
+
+.site-nav a {
+  color: var(--muted);
+  font-weight: 600;
+  text-decoration: none;
+  padding-block: .55rem;
+}
+
+.site-nav a[aria-current="page"], .site-nav a:hover {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: .3em;
+}
+
+.stats-content { display: grid; gap: 1.65rem; margin-block-start: 1.2rem; min-inline-size: 0; }
+.stats-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .65rem 1.3rem;
+  margin: 0;
+  padding-block-end: .8rem;
+  border-bottom: 1px solid var(--rule);
+}
+.stats-summary div { display: flex; flex-direction: column-reverse; }
+.stats-summary dt { font-size: .8125rem; color: var(--muted); }
+.stats-summary dd { margin: 0; font-size: 1.4rem; font-weight: 700; }
+.stats-calendar { min-inline-size: 0; }
+.stats-calendar .flag-heatmap { --flag-heatmap-color-scheme: inherit; max-inline-size: 26rem; background: transparent; }
+.stats-calendar .flag-heatmap__tile { min-block-size: 0; }
+.stats-calendar .flag-heatmap__tile:hover:not([data-period='today']) { background-color: var(--completed, var(--empty)); }
+.stats-calendar .flag-heatmap__tile[data-period='future']:hover { background-color: var(--due, var(--future-empty)); }
+.stats-calendar .flag-heatmap__page { min-block-size: 2.5rem; }
+
+.stats-table { inline-size: 100%; border-collapse: collapse; table-layout: fixed; font-size: .9rem; }
+.stats-table caption { text-align: start; font-size: 1rem; font-weight: 700; margin-block-end: .4rem; }
+.stats-table :is(th, td) { text-align: start; border-bottom: 1px solid var(--rule); padding: .4rem .3rem; vertical-align: middle; overflow-wrap: break-word; }
+.stats-table thead th { color: var(--muted); font-size: .75rem; font-weight: 600; }
+.stats-table tbody th { font-weight: 600; }
+.stats-table :is(th, td):first-child { padding-inline-start: 0; }
+.stats-table :is(th, td):last-child { padding-inline-end: 0; }
+.stats-table--breakdown th:first-child { inline-size: 30%; }
+.stats-table--breakdown :is(th, td):not(:first-child) { text-align: end; }
+.stats-table--countries th:first-child { inline-size: 40%; }
+.stats-table--countries th:nth-child(2) { inline-size: 23%; }
+.stats-flag { inline-size: 1.25em; block-size: .9em; object-fit: contain; margin-inline-end: .4em; vertical-align: baseline; }
+.stats-status { color: var(--muted); }
+.stats-status[data-status='Learning'] { color: inherit; }
+.stats-status[data-status='Learnt'] { color: var(--correct, #166345); font-weight: 650; }
+.stats-table td, .stats-summary dd { font-variant-numeric: tabular-nums; }
+
+@media (max-width: 400px) {
+  .stats-summary { gap: .45rem .55rem; }
+  .stats-table { font-size: .8125rem; }
+  .stats-table :is(th, td) { padding-inline: .22rem; }
+  .stats-table--breakdown th:first-child { inline-size: 25%; }
+  .stats-table--breakdown thead th:nth-child(3) { white-space: nowrap; }
+}

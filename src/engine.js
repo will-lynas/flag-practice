@@ -47,8 +47,18 @@ export function loadProgress({ strict = false } = {}) {
           state.reviewLog = data.reviewLog.filter((at) =>
             typeof at === 'string' && Number.isFinite(Date.parse(at)));
           if (strict && state.reviewLog.length !== data.reviewLog.length) throw new Error('Invalid review history');
+          // Filtering invalid timestamps would shift country annotations to the wrong attempts.
+          if (state.reviewLog.length !== data.reviewLog.length) delete state.reviewCountries;
         } else if (strict && data.reviewLog !== undefined) {
           throw new Error('Invalid review history');
+        }
+        if (state.reviewCountries !== undefined) {
+          const index = state.reviewCountries;
+          const valid = index && typeof index === 'object' && !Array.isArray(index) &&
+            Object.entries(index).every(([i, code]) => /^(0|[1-9]\d*)$/.test(i) &&
+              +i < (state.reviewLog?.length ?? 0) && typeof code === 'string' && /^[A-Z]{2}$/.test(code));
+          if (!valid && strict) throw new Error('Invalid review attribution');
+          if (!valid) delete state.reviewCountries;
         }
         return state;
       }
@@ -95,12 +105,17 @@ export function nextDue(state, allowed) {
   return earliest === null ? null : new Date(earliest);
 }
 
-export function getHeatmapData(state) {
+export function getHeatmapData(state, allowed, { includeUnassigned = !allowed } = {}) {
+  const reviews = [];
+  for (const [index, at] of (state.reviewLog ?? []).entries()) {
+    const code = state.reviewCountries?.[index];
+    if (!allowed || allowed.has(code) || (code === undefined && includeUnassigned)) reviews.push({ at });
+  }
   return {
-    reviews: (state.reviewLog ?? []).map((at) => ({ at })),
-    due: Object.values(state.cards)
-      .filter((card) => card.state !== State.New)
-      .map((card) => ({ at: new Date(card.due) })),
+    reviews,
+    due: Object.entries(state.cards)
+      .filter(([code, card]) => (!allowed || allowed.has(code)) && card.state !== State.New)
+      .map(([, card]) => ({ at: new Date(card.due) })),
   };
 }
 
@@ -119,9 +134,12 @@ export function grade(state, code, correct, now = new Date()) {
   if (!Object.hasOwn(state.cards, code)) return state;
   const rating = correct ? Rating.Good : Rating.Again;
   const { card } = scheduler.next(state.cards[code], new Date(now), rating);
+  const log = state.reviewLog ?? [];
   return {
     ...state,
     cards: { ...state.cards, [code]: card },
-    reviewLog: [...(state.reviewLog ?? []), card.last_review.toISOString()],
+    reviewLog: [...log, card.last_review.toISOString()],
+    // Sparse annotations leave v1 timestamps readable by older builds and never guess older countries.
+    reviewCountries: { ...state.reviewCountries, [log.length]: code },
   };
 }

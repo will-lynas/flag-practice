@@ -5,6 +5,7 @@ import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { addFive, grade } from '../src/engine.js';
 import { regionTests } from './regions.browser.js';
+import { statsTests } from './stats.browser.js';
 
 const progressKey = 'flag-trainer:progress:v1';
 const pendingKey = 'flag-trainer.ui.pending.v1';
@@ -20,7 +21,7 @@ test.before(async () => {
     server = createServer(async (request, response) => {
       const path = new URL(request.url, 'http://localhost').pathname;
       const asset = /^\/assets\/(?:flags\/[a-z]{2}\.svg|[\w-]+\.(?:js|css))$/u.test(path);
-      const file = path === '/' ? 'index.html' : asset ? path.slice(1) : '';
+      const file = ['/', '/stats', '/stats/'].includes(path) ? 'index.html' : asset ? path.slice(1) : '';
       const type = file && types[file.split('.').at(-1)];
       try {
         if (!type) throw new Error('Not a site asset');
@@ -144,7 +145,7 @@ test('guesses the first five without revealing answers, resumes on reload, and k
   assert.deepEqual(Object.keys(cards), firstFive);
   assert.equal(reviewLog.length, 5);
   assert.ok(Date.parse(cards.GB.due) < Date.parse(cards.US.due));
-  assert.equal(await page.getByRole('link', { name: /stats|regions/i }).count(), 0);
+  assert.equal(await page.getByRole('link', { name: 'Stats', exact: true }).count(), 1);
   await page.reload();
   await heading(page, 'No reviews due');
   assert.equal(await stored(page), finished);
@@ -333,3 +334,4 @@ test('refuses to start over when progress was written by a newer version', { ski
 });
 
 regionTests(test, { open, heading, button, flag, recall, stored });
+statsTests(test, { open, heading, stored, statsUrl: () => new URL('/stats', url).href });
