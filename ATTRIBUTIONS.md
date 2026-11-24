@@ -8,11 +8,11 @@ Coverage was checked against the UN's [member states](https://www.un.org/en/abou
 
 ## Flag assets
 
-The 197 SVGs in `assets/flags/` are unmodified 4:3 illustrations from [flag-icons v7.6.0](https://github.com/lipis/flag-icons/tree/6d6982dc20b2eb50967a343f05b60fbb81014e5f/flags/4x3), via the [npm release archive](https://registry.npmjs.org/flag-icons/-/flag-icons-7.6.0.tgz). Copyright (c) 2013 Panayiotis Lipiridis; [MIT license and notice](LICENSES/flag-icons-MIT.txt). Upstream [credits](https://github.com/lipis/flag-icons/blob/6d6982dc20b2eb50967a343f05b60fbb81014e5f/README.md#credits) acknowledge koppi's original SVG collection. Keep the MIT notice when redistributing the SVGs. The license covers the SVG files; restrictions on displaying or using official symbols may still apply. The standardized rendering can differ from each flag's official proportions.
+The 197 SVGs in `assets/flags/` are the unmodified, variable-proportion illustrations from [hampusborgos/country-flags](https://github.com/hampusborgos/country-flags/tree/c09927e63705529bbf59ca6684cd9b23225dddad/svg). Upstream [credits Wikimedia Commons and identifies the flags as public domain](https://github.com/hampusborgos/country-flags/blob/c09927e63705529bbf59ca6684cd9b23225dddad/README.md). Other restrictions on use of official symbols may apply.
 
-Archive integrity (npm SHA-512 SRI): `sha512-hir/PsXwr0EESyizKrXJzmkzpLIMf+1vlNKLqAfvdh+bsU94a7LYWTiubkHKqptGoCPzOUGcm6c4PfC9/BaGSQ==`.
+Snapshot archive SHA-256: `a0e028783137dba7e667b44366723e19dae50dbdfc0def2df653cf2e153cee9c`.
 
-Only the 197 SVGs and the MIT notice were extracted. The SVGs passed an XML allowlist audit for static SVG markup and local fragment references. No scripts, event handlers, external references, XML directives, or embedded personal metadata were found. The offline tests pin the audited SVG bytes and MIT notice with SHA-256.
+Only the 197 SVGs were extracted. The SVGs passed an XML allowlist audit for static SVG markup and local fragment references. No scripts, event handlers, external references, XML directives, or embedded personal metadata were found. The offline tests pin the audited SVG bytes with SHA-256.
 
 ## Scheduler
 

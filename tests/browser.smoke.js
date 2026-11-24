@@ -61,6 +61,35 @@ const button = (page, name) => page.getByRole('button', { name, exact: true });
 const heading = (page, name) => page.getByRole('heading', { name, exact: true }).waitFor();
 const stored = page => page.evaluate(key => localStorage.getItem(key), progressKey);
 
+test('the compact phone layout holds the flag and primary action in place across a guess', async t => {
+  const page = await open(t, { viewport: { width: 390, height: 382 }, isMobile: true, hasTouch: true });
+  const title = page.getByRole('heading', { name: 'Flag Practice', exact: true });
+  assert.equal(await page.title(), 'Flag Practice');
+  assert.equal(await title.evaluate(el => getComputedStyle(el).clipPath), 'inset(50%)');
+  assert.equal(await page.locator('.site-header').evaluate(el => getComputedStyle(el).borderBottomWidth), '0px');
+  await button(page, 'Learn 5 flags').tap();
+  const input = await recall(page, 'us');
+  const stage = page.locator('.flag-tray');
+  const originalStage = await stage.boundingBox();
+  const submit = await button(page, 'Submit').boundingBox();
+  const { naturalWidth, naturalHeight } = await page.locator('.flag').evaluate(img => ({
+    naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight,
+  }));
+  assert.ok(Math.abs(naturalWidth / naturalHeight - 1.9) < .03);
+  assert.equal(await input.evaluate(el => getComputedStyle(el).fontSize), '16px');
+  await input.fill('un');
+  const menu = await page.getByRole('listbox', { name: 'Country suggestions' }).boundingBox();
+  const field = await input.boundingBox();
+  assert.ok(menu.y >= 0 && menu.y + menu.height < field.y);
+  assert.ok(menu.height <= 112 && field.y + field.height <= 382);
+  const option = page.getByRole('option', { name: 'United States', exact: true });
+  await option.tap();
+  const nextButton = button(page, 'Next');
+  assert.deepEqual(await stage.boundingBox(), originalStage);
+  assert.deepEqual(await nextButton.boundingBox(), submit);
+  assert.equal(await nextButton.evaluate(el => el === document.activeElement), true);
+});
+
 async function flag(page, code, alt) {
   const img = page.getByRole('img', { name: alt, exact: true });
   await img.waitFor();

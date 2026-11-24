@@ -90,6 +90,7 @@ function button(label, action, className) {
 function mount(kind, title, stage, ...content) {
   clearTimeout(wakeTimer);
   screen = kind;
+  app.dataset.screen = kind;
   const heading = element('h2', title);
   heading.id = 'screen-title';
   heading.tabIndex = -1;
@@ -170,6 +171,7 @@ function showIdle(focus, now) {
     })));
   }
   const heading = mount('idle', !started && count ? 'Start learning' : 'No reviews due', '', ...content);
+  if (!started && count) heading.classList.add('sr-only');
   if (focus) focusHeading(heading);
   if (upcoming) wakeTimer = setTimeout(() => {
     if (+new Date() >= +due) refreshIdle();
@@ -179,11 +181,14 @@ function showIdle(focus, now) {
 
 function showFeedback(country, stage, answer, correct) {
   const label = correct ? 'Correct' : answer ? 'Not quite' : 'Skipped';
-  const next = button('Next', () => showNext());
-  const heading = mount('feedback', `${label}: ${country.name}`, stage,
-    flagTray(country, true), retryRow(next));
+  const next = button('Next', () => showNext(), 'answer-action');
+  const tray = flagTray(country, true);
+  const panel = element('div', '', 'answer-panel');
+  const heading = mount('feedback', `${label}: ${country.name}`, stage, tray, panel);
   heading.classList.add('result');
   heading.dataset.outcome = correct ? 'correct' : answer ? 'incorrect' : 'skipped';
+  heading.replaceChildren(element('span', `${label}:`, 'outcome'), ` ${country.name}`);
+  panel.append(heading, retryRow(next));
   next.setAttribute('aria-describedby', heading.id);
   next.focus();
 }
@@ -200,7 +205,7 @@ function record(country, stage, answer) {
 }
 
 function showRecall(country, stage, focus) {
-  const form = element('div');
+  const form = element('div', '', 'answer-panel');
   const label = element('label', 'Country', 'sr-only');
   label.htmlFor = 'country';
   const input = element('input');
@@ -228,7 +233,7 @@ function showRecall(country, stage, focus) {
   message.setAttribute('role', 'status');
   const announcement = element('p', '', 'sr-only');
   announcement.setAttribute('role', 'status');
-  const submit = button('Submit', () => submitAnswer());
+  const submit = button('Submit', () => submitAnswer(), 'answer-action');
   const skip = button('Don’t know', () => {
     if (!skip.disabled) record(country, stage, null);
   }, 'secondary');
@@ -236,7 +241,7 @@ function showRecall(country, stage, focus) {
   actions.append(skip);
   const combobox = element('div', '', 'country-control');
   combobox.append(label, input, list);
-  form.append(combobox, message, announcement, actions);
+  form.append(combobox, actions, message, announcement);
 
   let matches = [];
   let active = -1;
@@ -338,7 +343,7 @@ function showRecall(country, stage, focus) {
   }
 
   const tray = flagTray(country, false, [submit, skip]);
-  mount('recall', 'Which country uses this flag?', stage, tray, form);
+  mount('recall', 'Which country uses this flag?', stage, tray, form).classList.add('sr-only');
   if (focus) input.focus();
 }
 

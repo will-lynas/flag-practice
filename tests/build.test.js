@@ -25,7 +25,7 @@ test('production builds repeat byte-for-byte and ship all 197 flags and license 
   assert.equal(files.length, 197);
   assert.deepEqual(files, countries.map(country => country.flag.split('/').at(-1)).sort());
   for (const { flag } of countries) assert.deepEqual(read(dist, flag), read(root, flag), flag);
-  for (const notice of ['LICENSE', 'ATTRIBUTIONS.md', 'LICENSES/flag-icons-MIT.txt', 'LICENSES/ts-fsrs-MIT.txt']) {
+  for (const notice of ['LICENSE', 'ATTRIBUTIONS.md', 'LICENSES/ts-fsrs-MIT.txt']) {
     assert.deepEqual(read(dist, notice), read(root, notice), notice);
   }
   const html = read(dist, 'index.html').toString();

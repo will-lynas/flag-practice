@@ -103,7 +103,7 @@ test('one regular local SVG per country is shipped with no unused assets', () =>
   }
 });
 
-test('vendored flags and MIT notice match the scrubbed upstream snapshot', () => {
+test('vendored flags match the audited variable-proportion upstream snapshot', () => {
   const directory = new URL('../assets/flags/', import.meta.url);
   const flags = createHash('sha256');
   for (const filename of readdirSync(directory).sort()) {
@@ -111,8 +111,17 @@ test('vendored flags and MIT notice match the scrubbed upstream snapshot', () =>
     flags.update(readFileSync(new URL(filename, directory)));
     flags.update('\0');
   }
-  assert.equal(flags.digest('hex'), 'e5fe7e3e82ffbf557ce40c406242b443ba153b29d34ae23cea2ae03f7c883cc7');
-  const license = readFileSync(new URL('../LICENSES/flag-icons-MIT.txt', import.meta.url));
-  assert.equal(createHash('sha256').update(license).digest('hex'),
-    '8f1195d55a2fd315a07d812328470ca9ba2abb78c8d317ff19619d5125e00cea');
+  assert.equal(flags.digest('hex'), '32505029e0a4be481311028c4d271c1e9d72785efa683e04ab6fc7f0aecdde1b');
+});
+
+test('flag artwork retains square, wide and non-rectangular proportions', () => {
+  const flag = code => readFileSync(new URL(`../assets/flags/${code}.svg`, import.meta.url), 'utf8');
+  const ratio = code => {
+    const [, , width, height] = flag(code).match(/\bviewBox="([^"]+)"/u)[1].split(/\s+/u).map(Number);
+    return width / height;
+  };
+  assert.equal(ratio('ch'), 1);
+  assert.equal(ratio('us'), 1.9);
+  assert.ok(ratio('qa') > 2.5);
+  assert.ok(ratio('np') < 1);
 });
