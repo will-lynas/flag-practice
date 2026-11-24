@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import test from 'node:test';
-import { countries } from '../src/countries.js';
+import { countries } from '../src/countries.ts';
 
 const root = new URL('../', import.meta.url);
 const dist = new URL('dist/', root);
-const read = (dir, path) => readFileSync(new URL(path, dir));
+const read = (dir: URL, path: string) => readFileSync(new URL(path, dir));
 const manifest = () => {
   const files = readdirSync(dist, { recursive: true, withFileTypes: true });
   return Object.fromEntries(files.filter(file => file.isFile()).map(file => {
@@ -16,7 +16,7 @@ const manifest = () => {
 };
 
 test('production builds repeat byte-for-byte and ship all 197 flags and license notices', () => {
-  const build = () => execFileSync(process.execPath, ['scripts/build.js'], { cwd: root });
+  const build = () => execSync('npm run build', { cwd: root });
   build();
   const first = manifest();
   build();

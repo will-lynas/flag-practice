@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { civilDate, completedCalendar, dueCalendar } from '../src/review-calendar-data.js';
+import { civilDate, completedCalendar, dueCalendar } from '../src/review-calendar-data.ts';
+
+import type { ReviewCalendar } from '../src/review-calendar-data.ts';
 
 process.env.TZ = 'America/New_York';
-const rows = (...dates) => dates.map(at => Object.freeze({ at }));
-const iso = day => civilDate(day).toISOString().slice(0, 10);
-const daily = calendar => Object.fromEntries([...calendar.counts].map(([day, count]) => [iso(day), count]));
+const rows = (...dates: (string | Date)[]) => dates.map(at => Object.freeze({ at }));
+const iso = (day: number) => civilDate(day).toISOString().slice(0, 10);
+const daily = (calendar: ReviewCalendar) => Object.fromEntries([...calendar.counts].map(([day, count]) => [iso(day), count]));
 
 test('today can have real attempts and a separate backlog with overdue cards', () => {
   const now = new Date('2025-01-01T17:00Z');

@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import { createEmptyCard, fsrs, Rating } from 'ts-fsrs';
+import type { test as nodeTest } from 'node:test';
+import type { Page } from 'playwright-core';
+import type { BrowserHarness } from './browser.smoke.ts';
+import { parseSavedProgress } from './saved-progress.ts';
 
-export function regionTests(test, { open, heading, button, flag, recall, stored }) {
-  const region = page => page.getByLabel('Region', { exact: true });
+export function regionTests(test: typeof nodeTest, { open, heading, button, flag, recall, stored }: BrowserHarness) {
+  const region = (page: Page) => page.getByLabel('Region', { exact: true });
   const now = new Date('2026-05-03T12:00Z');
 
   test('region queues ignore other due cards and only enroll from the selection', async t => {
@@ -26,7 +30,7 @@ export function regionTests(test, { open, heading, button, flag, recall, stored 
     assert.equal(await stored(page), before);
     await button(page, 'Learn 5 more').click();
     await flag(page, 'gb', 'Flag to identify');
-    const { cards } = JSON.parse(await stored(page));
+    const { cards } = parseSavedProgress(await stored(page));
     assert.deepEqual(Object.keys(cards), ['JP', 'FR', 'GB', 'DE', 'IT', 'ES', 'CH']);
     await region(page).selectOption('asia');
     await flag(page, 'jp', 'Flag to identify');

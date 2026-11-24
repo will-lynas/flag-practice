@@ -1,36 +1,57 @@
-import { loadProgress, saveProgress, getDue, nextDue, addFive, getPracticeQueues, recordAttempt } from './engine.js';
-import { countries, countriesIn, regions, resolveCountry, searchCountries } from './countries.js';
-import { renderStats } from './stats.js';
+import { loadProgress, saveProgress, getDue, nextDue, addFive, getPracticeQueues, recordAttempt, isRecord } from './engine.ts';
+import { countries, countriesIn, regions, resolveCountry, searchCountries } from './countries.ts';
+import { renderStats } from './stats.ts';
+import type { Progress } from './engine.ts';
+import type { Country, Region } from './countries.ts';
 
-const app = document.querySelector('#trainer');
+const app = requiredElement('#trainer');
 const byCode = new Map(countries.map(country => [country.code, country]));
 const pendingKey = 'flag-trainer.ui.pending.v1';
 const regionKey = 'flag-trainer.ui.region';
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-let state;
+type Question = { country: Country; stage: string };
+type Outcome = 'correct' | 'incorrect' | 'skipped';
+type Screen = { kind: 'idle' | 'stats' | 'error' }
+  | { kind: 'recall'; question: Question }
+  | { kind: 'feedback'; question: Question; outcome: Outcome };
+
+let state: Progress | undefined;
 let practiceRestored = false;
-let screen;
-let wakeTimer;
-let region = 'world';
+let screen: Screen | undefined;
+let wakeTimer: number | undefined;
+let region: Region = 'world';
 let inScope = new Set(byCode.keys());
+
+function requiredElement(selector: string): HTMLElement {
+  const node = document.querySelector(selector);
+  if (!(node instanceof HTMLElement)) throw new Error(`Missing ${selector}`);
+  return node;
+}
+
+function progress(): Progress {
+  if (!state) throw new Error('Progress has not been loaded');
+  return state;
+}
 
 function readPending() {
   const raw = localStorage.getItem(pendingKey);
   if (!raw) return null;
-  let value;
+  let value: unknown;
   try { value = JSON.parse(raw); } catch { return null; }
-  if (!Array.isArray(value?.codes) || value.codes.length > 5 || new Set(value.codes).size !== value.codes.length) return null;
+  if (!isRecord(value) || !Array.isArray(value.codes)) return null;
+  const codes: unknown[] = value.codes;
+  if (codes.length > 5 || new Set(codes).size !== codes.length) return null;
   // Legacy batches also have a teaching cursor; only saved grades mark completion.
-  return { codes: value.codes.filter(code => byCode.has(code)) };
+  return { codes: codes.filter((code): code is string => typeof code === 'string' && byCode.has(code)) };
 }
 
-function saveState(value) {
+function saveState(value: Progress) {
   if (!saveProgress(value)) throw new Error('Progress write failed');
   state = value;
 }
 
-function element(tag, text, className) {
+function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string) {
   const node = document.createElement(tag);
   if (text) node.textContent = text;
   if (className) node.className = className;
@@ -41,8 +62,9 @@ const picker = element('select', '', 'region-picker');
 picker.setAttribute('aria-label', 'Region');
 for (const { id, label } of regions) picker.add(new Option(label, id));
 const nav = element('nav', '', 'site-nav');
+const links: HTMLAnchorElement[] = [];
 nav.setAttribute('aria-label', 'Main');
-for (const [label, path] of [['Practice', '/'], ['Stats', '/stats']]) {
+for (const [label, path] of [['Practice', '/'], ['Stats', '/stats']] as const) {
   const link = element('a', label);
   link.href = path;
   link.addEventListener('click', event => {
@@ -52,17 +74,18 @@ for (const [label, path] of [['Practice', '/'], ['Stats', '/stats']]) {
     history.pushState(null, '', path);
     renderView(true);
   });
+  links.push(link);
   nav.append(link);
 }
-const header = document.querySelector('.site-header');
+const header = requiredElement('.site-header');
 const tools = element('div', '', 'site-tools');
 tools.append(nav, picker);
 header.append(tools);
 const currentPath = () => /^\/stats\/?$/.test(location.pathname) ? '/stats' : '/';
 window.addEventListener('popstate', () => renderView(true));
 
-function selectRegion(id) {
-  region = regions.some(item => item.id === id) ? id : 'world';
+function selectRegion(id: string | null) {
+  region = regions.find(item => item.id === id)?.id ?? 'world';
   picker.value = region;
   inScope = new Set(countriesIn(region).map(country => country.code));
 }
@@ -81,17 +104,18 @@ picker.addEventListener('change', () => {
   apply();
 });
 
-function button(label, action, className) {
+function button(label: string, action: () => void, className?: string) {
   const node = element('button', label, className);
   node.type = 'button';
   if (action) node.addEventListener('click', action);
   return node;
 }
 
-function mount(kind, title, stage, ...content) {
-  clearTimeout(wakeTimer);
-  screen = kind;
-  app.dataset.screen = kind;
+function mount(view: Screen, title: string, ...content: Node[]) {
+  window.clearTimeout(wakeTimer);
+  screen = view;
+  app.dataset.screen = view.kind;
+  const stage = 'question' in view ? view.question.stage : '';
   const heading = element('h2', title);
   heading.id = 'screen-title';
   heading.tabIndex = -1;
@@ -101,22 +125,22 @@ function mount(kind, title, stage, ...content) {
   return heading;
 }
 
-function focusHeading(heading) {
+function focusHeading(heading: HTMLHeadingElement) {
   heading.focus();
 }
 
-function storageError(action, load = false) {
+function storageError(action: () => void, load = false) {
   const retry = button('Try again', () => { if (retry.isConnected) action(); });
-  focusHeading(mount('error', load ? 'Couldn’t load progress' : 'Couldn’t save progress', '', retryRow(retry)));
+  focusHeading(mount({ kind: 'error' }, load ? 'Couldn’t load progress' : 'Couldn’t save progress', retryRow(retry)));
 }
 
-function retryRow(control) {
+function retryRow(control: HTMLButtonElement) {
   const row = element('div', '', 'controls');
   row.append(control);
   return row;
 }
 
-function flagTray(country, revealed, controls = []) {
+function flagTray(country: Country, revealed: boolean, controls: HTMLButtonElement[] = []) {
   const tray = element('div', '', 'flag-tray');
   const image = element('img', '', 'flag');
   image.alt = revealed ? `Flag of ${country.name}` : 'Flag to identify';
@@ -133,7 +157,7 @@ function flagTray(country, revealed, controls = []) {
     image.hidden = false;
     error.hidden = true;
     for (const control of controls) control.disabled = false;
-    if (document.activeElement === retry) app.querySelector('h2').focus();
+    if (document.activeElement === retry) app.querySelector('h2')?.focus();
   });
   image.addEventListener('error', () => {
     image.hidden = true;
@@ -145,13 +169,14 @@ function flagTray(country, revealed, controls = []) {
   return tray;
 }
 
-function showIdle(focus, now) {
+function showIdle(focus: boolean, now: Date) {
+  const state = progress();
   const unseen = [...inScope].filter(code => !Object.hasOwn(state.cards, code));
   const started = unseen.length < inScope.size;
   const count = Math.min(5, unseen.length);
   const due = nextDue(state, inScope);
   const upcoming = due instanceof Date && due > now;
-  const content = [];
+  const content: HTMLElement[] = [];
   if (upcoming) {
     const detail = element('p', 'Next review: ', 'detail');
     const time = element('time', dateFormat.format(due));
@@ -164,48 +189,51 @@ function showIdle(focus, now) {
     content.push(retryRow(button(label, () => {
       function start() {
         const now = new Date();
-        if (getDue(state, now, inScope).length) return showNext();
-        try { saveState(addFive(state, unseen, now)); } catch { return storageError(start); }
+        const current = progress();
+        if (getDue(current, now, inScope).length) return showNext();
+        try { saveState(addFive(current, unseen, now)); } catch { return storageError(start); }
         showNext();
       }
       start();
     })));
   }
-  const heading = mount('idle', !started && count ? 'Start learning' : 'No reviews due', '', ...content);
+  const heading = mount({ kind: 'idle' }, !started && count ? 'Start learning' : 'No reviews due', ...content);
   if (!started && count) heading.classList.add('sr-only');
   if (focus) focusHeading(heading);
-  if (upcoming) wakeTimer = setTimeout(() => {
+  if (upcoming) wakeTimer = window.setTimeout(() => {
     if (+new Date() >= +due) refreshIdle();
     else showIdle(false, new Date());
-  }, Math.min(due - now + 10, 2 ** 31 - 1));
+  }, Math.min(due.getTime() - now.getTime() + 10, 2 ** 31 - 1));
 }
 
-function showFeedback(country, stage, answer, correct) {
-  const label = correct ? 'Correct' : answer ? 'Not quite' : 'Skipped';
+function showFeedback(view: Extract<Screen, { kind: 'feedback' }>) {
+  const { country } = view.question;
+  const label = view.outcome === 'correct' ? 'Correct' : view.outcome === 'incorrect' ? 'Not quite' : 'Skipped';
   const next = button('Next', () => showNext(), 'answer-action');
   const tray = flagTray(country, true);
   const panel = element('div', '', 'answer-panel');
-  const heading = mount('feedback', `${label}: ${country.name}`, stage, tray, panel);
+  const heading = mount(view, `${label}: ${country.name}`, tray, panel);
   heading.classList.add('result');
-  heading.dataset.outcome = correct ? 'correct' : answer ? 'incorrect' : 'skipped';
+  heading.dataset.outcome = view.outcome;
   heading.replaceChildren(element('span', `${label}:`, 'outcome'), ` ${country.name}`);
   panel.append(heading, retryRow(next));
   next.setAttribute('aria-describedby', heading.id);
   next.focus();
 }
 
-function record(country, stage, answer) {
-  const correct = answer === country.code;
-  const updated = recordAttempt(state, country.code, correct);
+function record(question: Question, answer: string | null) {
+  const correct = answer === question.country.code;
+  const updated = recordAttempt(progress(), question.country.code, correct);
   function save() {
     try { saveState(updated); }
     catch { return storageError(save); }
-    showFeedback(country, stage, answer, correct);
+    showFeedback({ kind: 'feedback', question, outcome: correct ? 'correct' : answer ? 'incorrect' : 'skipped' });
   }
   save();
 }
 
-function showRecall(country, stage, focus) {
+function showRecall(question: Question, focus: boolean) {
+  const { country } = question;
   const form = element('div', '', 'answer-panel');
   const label = element('label', 'Country', 'sr-only');
   label.htmlFor = 'country';
@@ -244,21 +272,22 @@ function showRecall(country, stage, focus) {
   combobox.append(label, input, list);
   form.append(combobox, actions, message, announcement);
 
-  let matches = [];
+  let matches: Country[] = [];
+  let options: HTMLLIElement[] = [];
   let active = -1;
   let composing = false;
 
-  function answer(code) {
-    if (form.isConnected) record(country, stage, code);
+  function answer(code: string | null) {
+    if (form.isConnected) record(question, code);
   }
 
-  function highlight(index) {
-    if (active >= 0) list.children[active].setAttribute('aria-selected', 'false');
+  function highlight(index: number) {
+    if (active >= 0) options[active].setAttribute('aria-selected', 'false');
     active = index;
     if (active < 0) {
       input.removeAttribute('aria-activedescendant');
     } else {
-      const option = list.children[active];
+      const option = options[active];
       option.setAttribute('aria-selected', 'true');
       input.setAttribute('aria-activedescendant', option.id);
       const top = option.offsetTop;
@@ -274,6 +303,7 @@ function showRecall(country, stage, focus) {
     list.hidden = true;
     list.replaceChildren();
     matches = [];
+    options = [];
     announcement.textContent = '';
   }
 
@@ -282,7 +312,7 @@ function showRecall(country, stage, focus) {
     input.removeAttribute('aria-invalid');
   }
 
-  function choose(option) {
+  function choose(option: Country) {
     if (!submit.disabled && !composing) answer(option.code);
   }
 
@@ -295,7 +325,7 @@ function showRecall(country, stage, focus) {
       announcement.textContent = 'No suggestions.';
       return;
     }
-    list.append(...matches.map((country, i) => {
+    options = matches.map((country, i) => {
       const option = element('li', country.name);
       option.id = `country-option-${i}`;
       option.setAttribute('role', 'option');
@@ -303,7 +333,8 @@ function showRecall(country, stage, focus) {
       option.addEventListener('mousedown', event => event.preventDefault());
       option.addEventListener('click', () => choose(country));
       return option;
-    }));
+    });
+    list.append(...options);
     list.hidden = false;
     input.setAttribute('aria-expanded', 'true');
     announcement.textContent = `${matches.length} ${matches.length === 1 ? 'suggestion' : 'suggestions'} available.`;
@@ -311,7 +342,7 @@ function showRecall(country, stage, focus) {
 
   input.addEventListener('input', event => {
     clearMessage();
-    if (!composing && !event.isComposing) suggest();
+    if (!composing && !('isComposing' in event && event.isComposing)) suggest();
   });
   input.addEventListener('compositionstart', () => { composing = true; close(); });
   input.addEventListener('compositionend', () => { composing = false; suggest(); });
@@ -337,7 +368,7 @@ function showRecall(country, stage, focus) {
     }
   });
 
-  function submitAnswer(visibleFallback) {
+  function submitAnswer(visibleFallback?: Country) {
     if (composing || submit.disabled) return;
     const chosen = resolveCountry(input.value) ?? visibleFallback;
     if (chosen) return answer(chosen.code);
@@ -348,23 +379,30 @@ function showRecall(country, stage, focus) {
   }
 
   const tray = flagTray(country, false, [submit, skip]);
-  mount('recall', 'Which country uses this flag?', stage, tray, form).classList.add('sr-only');
+  mount({ kind: 'recall', question }, 'Which country uses this flag?', tray, form).classList.add('sr-only');
   if (focus) input.focus();
 }
 
 function showNext(focus = true) {
   const now = new Date();
+  const state = progress();
   const { due, retries } = getPracticeQueues(state, now, inScope);
-  const reviews = due.filter(code => state.cards[code].last_review);
-  if (reviews.length) return showRecall(byCode.get(reviews[0]), `Review · ${reviews.length} due`, focus);
-  if (due.length) return showRecall(byCode.get(due[0]), `New · ${due.length} remaining`, focus);
-  if (retries.length) return showRecall(byCode.get(retries[0]), `Retry · ${retries.length} remaining`, focus);
+  const reviews = due.filter(code => state.cards[code]?.last_review);
+  const code = reviews[0] ?? due[0] ?? retries[0];
+  if (code !== undefined) {
+    // The queues were filtered to the selected region of this catalogue.
+    const country = byCode.get(code);
+    if (!country) throw new Error(`Unknown flag ${code}`);
+    const stage = reviews.length ? `Review · ${reviews.length} due`
+      : due.length ? `New · ${due.length} remaining` : `Retry · ${retries.length} remaining`;
+    return showRecall({ country, stage }, focus);
+  }
   showIdle(focus, now);
 }
 
-function renderView(focus) {
+function renderView(focus: boolean) {
   const path = currentPath();
-  for (const link of nav.children) {
+  for (const link of links) {
     if (link.pathname === path) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
@@ -372,7 +410,7 @@ function renderView(focus) {
   if (!state) return init(focus);
   if (path === '/stats') {
     const { content, renderCalendar } = renderStats(state, region);
-    const heading = mount('stats', 'Stats', '', content);
+    const heading = mount({ kind: 'stats' }, 'Stats', content);
     renderCalendar();
     if (focus) focusHeading(heading);
     return;
@@ -402,17 +440,17 @@ function init(focus = true) {
   renderView(focus);
 }
 
-function plainKey(event) {
+function plainKey(event: KeyboardEvent) {
   return !event.defaultPrevented && !event.isComposing && event.keyCode !== 229 &&
     !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
 }
 
 app.addEventListener('keydown', event => {
-  if (screen !== 'stats' && event.key === 'Enter' && event.repeat && plainKey(event)) event.preventDefault();
+  if (screen?.kind !== 'stats' && event.key === 'Enter' && event.repeat && plainKey(event)) event.preventDefault();
 });
 
 function refreshIdle() {
-  if (screen === 'idle' && getDue(state, new Date(), inScope).length) {
+  if (screen?.kind === 'idle' && getDue(progress(), new Date(), inScope).length) {
     showNext(document.activeElement !== picker);
   }
 }

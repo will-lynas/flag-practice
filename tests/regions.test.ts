@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { countries } from '../src/countries.js';
-import * as catalog from '../src/countries.js';
-import * as engine from '../src/engine.js';
+import { countries } from '../src/countries.ts';
+import * as catalog from '../src/countries.ts';
+import * as engine from '../src/engine.ts';
 
 const totals = { africa: 54, asia: 49, europe: 45, 'north-america': 23, oceania: 14, 'south-america': 12 };
 
@@ -30,7 +30,7 @@ test('due selection and next wake-up use only the allowed codes', () => {
   const state = { cards: { BR: { due: now }, DE: { due: future }, FR: { due: now }, US: { due: future } } };
   const europe = new Set(['DE', 'FR']);
   assert.deepEqual(engine.getDue(state, now, europe), ['FR']);
-  assert.equal(+engine.nextDue(state, new Set(['DE'])), +future);
+  assert.deepEqual(engine.nextDue(state, new Set(['DE'])), future);
   assert.equal(engine.nextDue(state, new Set(['JP'])), null);
   assert.deepEqual(engine.getDue(state, now), ['BR', 'FR']);
 });

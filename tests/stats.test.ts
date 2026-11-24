@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createEmptyCard } from 'ts-fsrs';
-import { addFive, getHeatmapData, grade, loadProgress } from '../src/engine.js';
+import { addFive, getHeatmapData, grade, loadProgress } from '../src/engine.ts';
 
 const now = new Date('2026-05-03T12:00Z');
 const regional = new Set(['JP', 'KR']);
@@ -18,16 +18,18 @@ test('country history excludes anonymous legacy attempts without deleting or ass
     assert.deepEqual(getHeatmapData(loaded).reviews.map(r => r.at), [prior, ...Array(3).fill(now.toISOString())]);
     const data = getHeatmapData(loaded, regional);
     assert.equal(data.reviews.length, 2);
-    assert.deepEqual(data.due.map(r => +r.at), [+loaded.cards.JP.due]);
-    assert.equal(getHeatmapData({ cards: { JP: loaded.cards.JP } }, regional).reviews.length, 0);
+    const jp = loaded.cards.JP;
+    assert.ok(jp);
+    assert.deepEqual(data.due.map(r => +r.at), [+jp.due]);
+    assert.equal(getHeatmapData({ cards: { JP: jp } }, regional).reviews.length, 0);
   } finally {
     if (previous) Object.defineProperty(globalThis, 'localStorage', previous);
-    else delete globalThis.localStorage;
+    else Reflect.deleteProperty(globalThis, 'localStorage');
   }
 });
 
 test('status uses the scheduled interval, including for overdue cards', async () => {
-  const { getStats } = await import('../src/stats-data.js');
+  const { getStats, statuses } = await import('../src/stats-data.ts');
   const newCard = createEmptyCard(now);
   const state = { cards: {
     JP: { ...newCard, last_review: now, scheduled_days: 14, due: new Date(+now - 1000) },
@@ -44,7 +46,7 @@ test('status uses the scheduled interval, including for overdue cards', async ()
   assert.deepEqual(asia.rows.filter(row => ['CN', 'JP', 'KR'].includes(row.country.code)).map(row => [row.country.code, row.status, row.due]), [
     ['CN', 'Not started', null], ['JP', 'Learnt', state.cards.JP.due], ['KR', 'Learning', state.cards.KR.due],
   ]);
-  for (const status of Object.keys(world.counts)) {
+  for (const status of statuses) {
     assert.equal(world.breakdown.reduce((sum, row) => sum + row.counts[status], 0), world.counts[status]);
   }
   assert.equal(world.breakdown.reduce((sum, row) => sum + row.total, 0), world.rows.length);
@@ -60,6 +62,6 @@ test('invalid attribution indexes or code shapes fail strict loading', () => {
     }
   } finally {
     if (previous) Object.defineProperty(globalThis, 'localStorage', previous);
-    else delete globalThis.localStorage;
+    else Reflect.deleteProperty(globalThis, 'localStorage');
   }
 });

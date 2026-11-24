@@ -1,17 +1,20 @@
-import { renderHeatmap } from './heatmap.js';
-import { completedCalendar, dueCalendar } from './review-calendar-data.js';
-import { getHeatmapData } from './engine.js';
-import { countriesIn } from './countries.js';
-import { getStats, statuses } from './stats-data.js';
+import { renderHeatmap } from './heatmap.ts';
+import { completedCalendar, dueCalendar } from './review-calendar-data.ts';
+import { getHeatmapData } from './engine.ts';
+import { countriesIn } from './countries.ts';
+import type { Region } from './countries.ts';
+import type { Progress } from './engine.ts';
+import type { ActivateCalendar, ClearCalendar } from './heatmap.ts';
+import { getStats, statuses } from './stats-data.ts';
 
-function element(tag, text, className) {
+function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string | number | null, className?: string) {
   const node = document.createElement(tag);
-  if (text != null) node.textContent = text;
+  if (text != null) node.textContent = String(text);
   if (className) node.className = className;
   return node;
 }
 
-function table(name, columns) {
+function table(name: string, columns: readonly string[]) {
   const node = element('table', null, 'stats-table');
   node.createCaption().textContent = name;
   const row = node.createTHead().insertRow();
@@ -23,7 +26,7 @@ function table(name, columns) {
   return { node, body: node.createTBody() };
 }
 
-function rowWithHeading(body, name) {
+function rowWithHeading(body: HTMLTableSectionElement, name: string) {
   const row = body.insertRow();
   const heading = element('th', name);
   heading.scope = 'row';
@@ -33,10 +36,11 @@ function rowWithHeading(body, name) {
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-export function renderStats(state, region, now = new Date()) {
+export function renderStats(state: Progress, region: Region, now = new Date()) {
   const { rows, counts, total, dueNow, breakdown } = getStats(state, region, now);
   const summary = element('dl', null, 'stats-summary');
-  for (const [label, value] of [['Total', total], ...statuses.map(status => [status, counts[status]]), ['Due now', dueNow]]) {
+  const metrics: (readonly [string, number])[] = [['Total', total], ...statuses.map(status => [status, counts[status]] as const), ['Due now', dueNow]];
+  for (const [label, value] of metrics) {
     const metric = element('div');
     const name = element('dt', label);
     if (label === 'Learnt') name.title = 'Last scheduled interval was at least 14 days';
@@ -52,7 +56,7 @@ export function renderStats(state, region, now = new Date()) {
   regional.node.classList.add('stats-table--breakdown');
   for (const { label, counts, total } of breakdown) {
     const row = rowWithHeading(regional.body, label);
-    for (const value of [...statuses.map(status => counts[status]), total]) row.insertCell().textContent = value;
+    for (const value of [...statuses.map(status => counts[status]), total]) row.insertCell().textContent = String(value);
   }
 
   const countries = table('Countries', ['Country', 'Status', 'Next review']);
@@ -63,7 +67,7 @@ export function renderStats(state, region, now = new Date()) {
     image.alt = '';
     image.loading = 'lazy';
     image.src = `/${country.flag}`;
-    row.firstChild.prepend(image);
+    row.cells[0].prepend(image);
     const stage = element('span', status, 'stats-status');
     stage.dataset.status = status;
     if (status === 'Learnt') stage.title = 'Last scheduled interval was at least 14 days';
@@ -80,8 +84,8 @@ export function renderStats(state, region, now = new Date()) {
   if (region === 'world') content.append(regional.node);
   content.append(countries.node);
   return { content, renderCalendar: () => {
-    let clearActive;
-    const activate = clear => {
+    let clearActive: ClearCalendar | undefined;
+    const activate: ActivateCalendar = clear => {
       if (clearActive !== clear) clearActive?.();
       clearActive = clear;
     };

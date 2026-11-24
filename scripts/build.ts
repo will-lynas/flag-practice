@@ -8,7 +8,7 @@ await rm(dist, { recursive: true, force: true });
 
 const { metafile } = await build({
   absWorkingDir: fileURLToPath(root),
-  entryPoints: ['src/main.js', 'src/style.css'],
+  entryPoints: ['src/main.ts', 'src/style.css'],
   outdir: 'dist/assets',
   entryNames: '[name]-[hash]',
   format: 'esm',

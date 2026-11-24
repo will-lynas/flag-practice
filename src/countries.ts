@@ -1,6 +1,15 @@
 // Familiar flags first (editorial order), then the rest by English display name.
 // Codes are ISO 3166-1 alpha-2 except for Kosovo's user-assigned XK.
-const countryRows = [
+type CountryRow = [code: string, name: string, ...aliases: string[]];
+
+export interface Country {
+  readonly code: string;
+  readonly name: string;
+  readonly aliases: readonly string[];
+  readonly flag: string;
+}
+
+const countryRows: CountryRow[] = [
   ['US', 'United States', 'USA', 'United States of America', 'America', 'The United States'],
   ['GB', 'United Kingdom', 'UK', 'Great Britain', 'Britain', 'The United Kingdom', 'United Kingdom of Great Britain and Northern Ireland'],
   ['CA', 'Canada'],
@@ -201,7 +210,7 @@ const countryRows = [
   ['ZW', 'Zimbabwe'],
 ];
 
-export const countries = Object.freeze(countryRows.map(([code, name, ...aliases]) =>
+export const countries: readonly Country[] = Object.freeze(countryRows.map(([code, name, ...aliases]) =>
   Object.freeze({ code, name, aliases: Object.freeze(aliases), flag: `assets/flags/${code.toLowerCase()}.svg` }),
 ));
 
@@ -215,18 +224,19 @@ const continentGroups = [
   ['north-america', 'North America', 'AG BB BS BZ CA CR CU DM DO GD GT HN HT JM KN LC MX NI PA SV TT US VC'],
   ['oceania', 'Oceania', 'AU FJ FM KI MH NR NZ PG PW SB TO TV VU WS'],
   ['south-america', 'South America', 'AR BO BR CL CO EC GY PE PY SR UY VE'],
-];
-export const regions = Object.freeze([['world', 'World'], ...continentGroups].map(([id, label]) =>
+] as const;
+export const regions = Object.freeze([['world', 'World'] as const, ...continentGroups].map(([id, label]) =>
   Object.freeze({ id, label }),
 ));
-const byRegion = new Map([['world', countries]]);
+export type Region = (typeof regions)[number]['id'];
+const byRegion = new Map<string, readonly Country[]>([['world', countries]]);
 for (const [id, , codes] of continentGroups) {
   const set = new Set(codes.split(' '));
   byRegion.set(id, Object.freeze(countries.filter(country => set.has(country.code))));
 }
-export const countriesIn = region => byRegion.get(region) ?? countries;
+export const countriesIn = (region: string) => byRegion.get(region) ?? countries;
 
-function normalize(text) {
+function normalize(text: string) {
   const folded = text.normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '');
   if (!/[\p{L}\p{N}]/u.test(folded)) return '';
   const normalized = folded
@@ -246,7 +256,7 @@ const searchIndex = countries.map((country, order) => ({
   aliases: country.aliases.map(normalize),
 }));
 
-export function resolveCountry(query) {
+export function resolveCountry(query: unknown): Country | null {
   const needle = typeof query === 'string' ? normalize(query) : '';
   if (!needle) return null;
   const matches = searchIndex.filter(({ code, name, aliases }) =>
@@ -254,7 +264,7 @@ export function resolveCountry(query) {
   return matches.length === 1 ? matches[0].country : null;
 }
 
-function matchRank(text, query) {
+function matchRank(text: string, query: string) {
   if (text === query) return 0;
   if (text.startsWith(query)) return 2;
   if (text.includes(` ${query}`)) return 4;
@@ -262,7 +272,7 @@ function matchRank(text, query) {
   return Infinity;
 }
 
-export function searchCountries(query) {
+export function searchCountries(query: unknown): Country[] {
   const needle = typeof query === 'string' ? normalize(query) : '';
   if (!needle) return [];
 

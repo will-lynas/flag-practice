@@ -2,28 +2,42 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import test from 'node:test';
+import type { TestContext } from 'node:test';
+import type { Server } from 'node:http';
+import type { Browser, BrowserContextOptions, Page } from 'playwright-core';
+import { parseSavedProgress } from './saved-progress.ts';
 import { chromium } from 'playwright-core';
 import { createEmptyCard, fsrs, Rating, State } from 'ts-fsrs';
-import { addFive, grade } from '../src/engine.js';
-import { regionTests } from './regions.browser.js';
-import { statsTests } from './stats.browser.js';
+import { addFive, grade } from '../src/engine.ts';
+import { regionTests } from './regions.browser.ts';
+import { statsTests } from './stats.browser.ts';
+
+declare global {
+  interface Window {
+    progressWrites: number;
+    statsWrites: [method: 'setItem' | 'removeItem' | 'clear', key?: string][];
+  }
+}
 
 const progressKey = 'flag-trainer:progress:v1';
 const pendingKey = 'flag-trainer.ui.pending.v1';
 const firstFive = ['US', 'GB', 'CA', 'JP', 'FR'];
 const firstFiveNames = ['United States', 'United Kingdom', 'Canada', 'Japan', 'France'];
 const base = process.env.FLAG_TEST_URL;
-const types = { html: 'text/html', js: 'text/javascript', css: 'text/css', svg: 'image/svg+xml' };
-let browser, server, url;
+const types: Readonly<Partial<Record<string, string>>> = { html: 'text/html', js: 'text/javascript', css: 'text/css', svg: 'image/svg+xml' };
+let browser: Browser;
+let server: Server | undefined;
+let url: string;
 
 test.before(async () => {
   if (base) url = new URL(base).href;
   else {
-    server = createServer(async (request, response) => {
-      const path = new URL(request.url, 'http://localhost').pathname;
+    const listener = createServer(async (request, response) => {
+      const path = new URL(request.url ?? '/', 'http://localhost').pathname;
       const asset = /^\/assets\/(?:flags\/[a-z]{2}\.svg|[\w-]+\.(?:js|css))$/u.test(path);
       const file = ['/', '/stats', '/stats/'].includes(path) ? 'index.html' : asset ? path.slice(1) : '';
-      const type = file && types[file.split('.').at(-1)];
+      const extension = file.split('.').at(-1);
+      const type = extension && types[extension];
       try {
         if (!type) throw new Error('Not a site asset');
         const body = await readFile(new URL(`../dist/${file}`, import.meta.url));
@@ -32,8 +46,11 @@ test.before(async () => {
         response.writeHead(404).end();
       }
     });
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    url = `http://127.0.0.1:${server.address().port}/`;
+    server = listener;
+    await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
+    const address = listener.address();
+    assert.ok(address && typeof address !== 'string');
+    url = `http://127.0.0.1:${address.port}/`;
   }
   browser = await chromium.launch({ channel: process.env.CHROMIUM_PATH ? undefined : 'chrome',
     executablePath: process.env.CHROMIUM_PATH, headless: true });
@@ -41,26 +58,27 @@ test.before(async () => {
 
 test.after(async () => {
   await browser?.close();
-  if (server) await new Promise(resolve => server.close(resolve));
+  const listener = server;
+  if (listener) await new Promise<void>(resolve => listener.close(() => resolve()));
 });
 
-async function open(t, contextOptions) {
+async function open(t: TestContext, contextOptions?: BrowserContextOptions) {
   const context = await browser.newContext(contextOptions);
   t.after(() => context.close());
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
-  const errors = [];
+  const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, []));
   const response = await page.goto(url);
-  assert.ok(response.ok(), `Page returned ${response.status()}: ${url}`);
+  assert.ok(response?.ok(), `Page returned ${response?.status()}: ${url}`);
   assert.equal(new URL(page.url()).origin, new URL(url).origin);
   return page;
 }
 
-const button = (page, name) => page.getByRole('button', { name, exact: true });
-const heading = (page, name) => page.getByRole('heading', { name, exact: true }).waitFor();
-const stored = page => page.evaluate(key => localStorage.getItem(key), progressKey);
+const button = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
+const heading = (page: Page, name: string) => page.getByRole('heading', { name, exact: true }).waitFor();
+const stored = (page: Page) => page.evaluate(key => localStorage.getItem(key), progressKey);
 
 test('the compact phone layout holds the flag and primary action in place across a guess', async t => {
   const page = await open(t, { viewport: { width: 390, height: 382 }, isMobile: true, hasTouch: true });
@@ -73,14 +91,16 @@ test('the compact phone layout holds the flag and primary action in place across
   const stage = page.locator('.flag-tray');
   const originalStage = await stage.boundingBox();
   const submit = await button(page, 'Submit').boundingBox();
-  const { naturalWidth, naturalHeight } = await page.locator('.flag').evaluate(img => ({
-    naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight,
-  }));
+  const { naturalWidth, naturalHeight } = await page.locator('.flag').evaluate(img => {
+    if (!(img instanceof HTMLImageElement)) throw new Error('Expected a flag image');
+    return { naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight };
+  });
   assert.ok(Math.abs(naturalWidth / naturalHeight - 1.9) < .03);
   assert.equal(await input.evaluate(el => getComputedStyle(el).fontSize), '16px');
   await input.fill('un');
   const menu = await page.getByRole('listbox', { name: 'Country suggestions' }).boundingBox();
   const field = await input.boundingBox();
+  assert.ok(menu && field);
   assert.ok(menu.y >= 0 && menu.y + menu.height < field.y);
   assert.ok(menu.height <= 112 && field.y + field.height <= 382);
   const option = page.getByRole('option', { name: 'United States', exact: true });
@@ -91,16 +111,16 @@ test('the compact phone layout holds the flag and primary action in place across
   assert.equal(await nextButton.evaluate(el => el === document.activeElement), true);
 });
 
-async function flag(page, code, alt) {
+async function flag(page: Page, code: string, alt: string) {
   const img = page.getByRole('img', { name: alt, exact: true });
   await img.waitFor();
   await page.waitForFunction(c => {
-    const img = document.querySelector('main img');
+    const img = document.querySelector<HTMLImageElement>('main img');
     return img?.complete && img.naturalWidth > 0 && new URL(img.src).pathname === `/assets/flags/${c}.svg`;
   }, code);
 }
 
-async function recall(page, code) {
+async function recall(page: Page, code: string) {
   await heading(page, 'Which country uses this flag?');
   await flag(page, code, 'Flag to identify');
   const answer = firstFiveNames[firstFive.indexOf(code.toUpperCase())];
@@ -127,7 +147,7 @@ test('guesses the first five without revealing answers, resumes on reload, and k
   await page.getByRole('option', { name: 'United States', exact: true }).waitFor();
   await input.press('Enter');
   await page.getByText('Enter a full country name or choose a suggestion.').waitFor();
-  assert.equal(JSON.parse(await stored(page)).reviewLog, undefined);
+  assert.equal(parseSavedProgress(await stored(page)).reviewLog, undefined);
   await input.press('ArrowDown');
   assert.equal(await page.locator('[role=option][aria-selected=true]').textContent(), 'United States');
   await input.press('ArrowDown');
@@ -158,8 +178,8 @@ test('guesses the first five without revealing answers, resumes on reload, and k
   await page.keyboard.press('Enter');
   await heading(page, 'Skipped: Japan');
   await flag(page, 'jp', 'Flag of Japan');
-  const afterSkip = JSON.parse(await stored(page));
-  assert.equal(afterSkip.reviewLog.length, 4);
+  const afterSkip = parseSavedProgress(await stored(page));
+  assert.equal(afterSkip.reviewLog?.length, 4);
   // Both fresh cards were graded at the same instant: Skip must match a wrong guess.
   assert.deepEqual(afterSkip.cards.JP, afterSkip.cards.GB);
   await page.keyboard.press('Enter');
@@ -190,9 +210,10 @@ test('guesses the first five without revealing answers, resumes on reload, and k
   await heading(page, 'No reviews due');
   await button(page, 'Learn 5 more').waitFor();
   const finished = await stored(page);
-  const { cards, reviewLog, reviewCountries } = JSON.parse(finished);
+  const { cards, reviewLog, reviewCountries } = parseSavedProgress(finished);
   assert.deepEqual(Object.keys(cards), firstFive);
   assert.deepEqual(reviewLog, Array(8).fill(now.toISOString()));
+  assert.ok(reviewCountries);
   assert.deepEqual(Object.values(reviewCountries), [...firstFive, 'GB', 'JP', 'GB']);
   assert.deepEqual(cards.GB, afterSkip.cards.GB);
   assert.deepEqual(cards.JP, afterSkip.cards.JP);
@@ -213,7 +234,7 @@ test('guesses the first five without revealing answers, resumes on reload, and k
 const retryClock = new Date('2026-05-03T12:00:00Z');
 const scheduler = fsrs({ enable_fuzz: false });
 
-async function dueFixture(page, cards) {
+async function dueFixture(page: Page, cards: Record<string, Date>) {
   await page.clock.setFixedTime(retryClock);
   const learned = new Date('2026-04-01T12:00:00Z');
   const initial = scheduler.next(createEmptyCard(learned), learned, Rating.Good).card;
@@ -237,7 +258,7 @@ test('due reviews retry after the remaining due flags without leaking across reg
   await recall(page, 'gb');
   await button(page, 'Don’t know').click();
   await heading(page, 'Skipped: United Kingdom');
-  const missed = JSON.parse(await stored(page));
+  const missed = parseSavedProgress(await stored(page));
   const lapse = scheduler.next({ ...review, due: retryClock }, retryClock, Rating.Again).card;
   assert.equal(lapse.state, State.Relearning);
   assert.equal(lapse.lapses, review.lapses + 1);
@@ -265,11 +286,12 @@ test('due reviews retry after the remaining due flags without leaking across reg
   await heading(page, 'Correct: United Kingdom');
   await button(page, 'Next').click();
   await heading(page, 'No reviews due');
-  const finished = JSON.parse(await stored(page));
+  const finished = parseSavedProgress(await stored(page));
   assert.deepEqual(finished.cards.GB, missed.cards.GB);
   assert.deepEqual(finished.cards.DE, missed.cards.DE);
   assert.deepEqual(finished.cards.JP, missed.cards.JP);
   assert.deepEqual(finished.reviewLog, [retryClock, retryClock, beforeRetry].map(at => at.toISOString()));
+  assert.ok(finished.reviewCountries);
   assert.deepEqual(Object.values(finished.reviewCountries), ['GB', 'FR', 'GB']);
 });
 
@@ -280,7 +302,7 @@ test('a singleton retry is immediate and an already-due retry is graded just onc
   await input.fill('France');
   await input.press('Enter');
   await heading(page, 'Not quite: United Kingdom');
-  const missed = JSON.parse(await stored(page)).cards.GB;
+  const missed = parseSavedProgress(await stored(page)).cards.GB;
   await button(page, 'Next').click();
   assert.equal(await page.locator('#trainer').getAttribute('data-screen'), 'recall');
   await recall(page, 'gb');
@@ -288,7 +310,7 @@ test('a singleton retry is immediate and an already-due retry is graded just onc
   await heading(page, 'Skipped: United Kingdom');
   await page.reload(); // Persisted even before pressing Next on the miss.
   await recall(page, 'gb');
-  assert.deepEqual(JSON.parse(await stored(page)).cards.GB, missed);
+  assert.deepEqual(parseSavedProgress(await stored(page)).cards.GB, missed);
 
   const due = new Date(missed.due);
   await page.clock.setFixedTime(due);
@@ -300,12 +322,13 @@ test('a singleton retry is immediate and an already-due retry is graded just onc
   await heading(page, 'Correct: United Kingdom');
   await button(page, 'Next').click();
   await heading(page, 'No reviews due');
-  const finished = JSON.parse(await stored(page));
+  const finished = parseSavedProgress(await stored(page));
   const expected = scheduler.next({ ...missed, due, last_review: retryClock }, due, Rating.Good).card;
   assert.deepEqual(finished.cards.GB, JSON.parse(JSON.stringify(expected)));
   assert.equal(finished.cards.GB.reps, missed.reps + 1);
   assert.equal(finished.cards.GB.lapses, missed.lapses);
   assert.deepEqual(finished.reviewLog, [retryClock, retryClock, due].map(at => at.toISOString()));
+  assert.ok(finished.reviewCountries);
   assert.deepEqual(Object.values(finished.reviewCountries), ['GB', 'GB', 'GB']);
 });
 
@@ -335,14 +358,14 @@ test('Enter submits the only visible partial match without highlighting it', asy
   for (const init of [{ isComposing: true }, { keyCode: 229 }]) {
     await input.dispatchEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...init });
   }
-  assert.equal(JSON.parse(await stored(page)).reviewLog, undefined);
+  assert.equal(parseSavedProgress(await stored(page)).reviewLog, undefined);
 
   await page.keyboard.down('Enter');
   await heading(page, 'Correct: United States');
   await page.keyboard.down('Enter');
   await page.keyboard.up('Enter');
   await heading(page, 'Correct: United States');
-  assert.equal(JSON.parse(await stored(page)).reviewLog.length, 1);
+  assert.equal(parseSavedProgress(await stored(page)).reviewLog?.length, 1);
   await page.keyboard.press('Enter');
   await recall(page, 'gb');
 });
@@ -377,7 +400,7 @@ test('does not submit a unique match when the answer controls are disabled', { s
   await page.getByRole('option', { name: 'United States', exact: true }).waitFor();
   await input.press('Enter');
   await heading(page, 'Which country uses this flag?');
-  assert.equal(JSON.parse(await stored(page)).reviewLog, undefined);
+  assert.equal(parseSavedProgress(await stored(page)).reviewLog, undefined);
 });
 
 test('submits an exact normalized country code without needing a suggestion', async t => {
@@ -413,16 +436,20 @@ test('a failed miss write saves the grade, retry and history together exactly on
   await input.press('Enter');
   await heading(page, 'Couldn’t save progress');
   assert.equal(await stored(page), before);
-  await button(page, 'Try again').evaluate(control => { control.click(); control.click(); });
+  await button(page, 'Try again').evaluate(control => {
+    if (!(control instanceof HTMLButtonElement)) throw new Error('Expected a retry button');
+    control.click();
+    control.click();
+  });
   await heading(page, 'Not quite: United States');
   assert.equal(await page.evaluate(() => window.progressWrites), 1);
-  const saved = JSON.parse(await stored(page));
+  const saved = parseSavedProgress(await stored(page));
   assert.equal(saved.cards.US.reps, 1);
   assert.deepEqual(saved.retryQueue, ['US']);
-  assert.equal(saved.reviewLog.length, 1);
+  assert.equal(saved.reviewLog?.length, 1);
   await page.reload();
   await recall(page, 'gb');
-  assert.deepEqual(JSON.parse(await stored(page)), saved);
+  assert.deepEqual(parseSavedProgress(await stored(page)), saved);
 });
 
 test('reload resumes from saved grades without writing a separate batch cursor', { skip: !!base }, async t => {
@@ -439,7 +466,7 @@ test('reload resumes from saved grades without writing a separate batch cursor',
   await input.fill('United States');
   await input.press('Enter');
   await heading(page, 'Correct: United States');
-  assert.equal(JSON.parse(await stored(page)).reviewLog.length, 1);
+  assert.equal(parseSavedProgress(await stored(page)).reviewLog?.length, 1);
   await page.reload();
   await recall(page, 'gb');
 });
@@ -465,7 +492,7 @@ test('an in-flight teaching batch resumes as guesses after due reviews, preservi
   await button(page, 'Next').click();
   await recall(page, 'us');
   assert.equal(await page.locator('.stage').textContent(), 'New · 5 remaining');
-  assert.deepEqual(JSON.parse(await stored(page)).reviewLog, [earlier.toISOString(), now.toISOString()]);
+  assert.deepEqual(parseSavedProgress(await stored(page)).reviewLog, [earlier.toISOString(), now.toISOString()]);
   assert.equal(await page.evaluate(key => localStorage.getItem(key), pendingKey), JSON.stringify(batch));
 });
 
@@ -476,7 +503,7 @@ test('a legacy pending batch saved before enrolment adds only its original five,
   await page.reload();
   await recall(page, 'us');
   const enrolled = await stored(page);
-  const { cards, reviewLog } = JSON.parse(enrolled);
+  const { cards, reviewLog } = parseSavedProgress(enrolled);
   assert.deepEqual(Object.keys(cards), firstFive);
   assert.equal(reviewLog, undefined);
   await page.reload();
@@ -493,6 +520,15 @@ test('refuses to start over when progress was written by a newer version', { ski
   assert.equal(await stored(page), bytes);
   assert.equal(await button(page, 'Learn 5 flags').count(), 0);
 });
+
+export type BrowserHarness = {
+  open: typeof open;
+  heading: typeof heading;
+  button: typeof button;
+  flag: typeof flag;
+  recall: typeof recall;
+  stored: typeof stored;
+};
 
 regionTests(test, { open, heading, button, flag, recall, stored });
 statsTests(test, { open, heading, stored, statsUrl: () => new URL('/stats', url).href });

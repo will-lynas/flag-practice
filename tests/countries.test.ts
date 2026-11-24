@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import test from 'node:test';
-import { countries, searchCountries } from '../src/countries.js';
+import { countries, searchCountries } from '../src/countries.ts';
 
-const codesFor = query => searchCountries(query).map(country => country.code);
+const codesFor = (query: unknown) => searchCountries(query).map(country => country.code);
 
 test('blank, punctuation-only, and non-string inputs produce no suggestions', () => {
   for (const query of ['', ' \n\t ', '… --', '&', null, undefined, 42]) {
@@ -115,9 +115,11 @@ test('vendored flags match the audited variable-proportion upstream snapshot', (
 });
 
 test('flag artwork retains square, wide and non-rectangular proportions', () => {
-  const flag = code => readFileSync(new URL(`../assets/flags/${code}.svg`, import.meta.url), 'utf8');
-  const ratio = code => {
-    const [, , width, height] = flag(code).match(/\bviewBox="([^"]+)"/u)[1].split(/\s+/u).map(Number);
+  const flag = (code: string) => readFileSync(new URL(`../assets/flags/${code}.svg`, import.meta.url), 'utf8');
+  const ratio = (code: string) => {
+    const viewBox = flag(code).match(/\bviewBox="([^"]+)"/u);
+    assert.ok(viewBox);
+    const [, , width, height] = viewBox[1].split(/\s+/u).map(Number);
     return width / height;
   };
   assert.equal(ratio('ch'), 1);

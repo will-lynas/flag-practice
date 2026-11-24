@@ -1,4 +1,5 @@
-import { civilDate } from './review-calendar-data.js';
+import { civilDate } from './review-calendar-data.ts';
+import type { ReviewCalendar } from './review-calendar-data.ts';
 
 const WEEKS = 13;
 const DAYS = WEEKS * 7;
@@ -10,28 +11,32 @@ const monthName = new Intl.DateTimeFormat('en', { month: 'short', timeZone: 'UTC
 const rangeDate = new Intl.DateTimeFormat('en', {
   year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC',
 });
-const level = count => count === 0 ? 0 : count < 5 ? 1 : count < 15 ? 2 : count < 30 ? 3 : 4;
+const level = (count: number) => count === 0 ? 0 : count < 5 ? 1 : count < 15 ? 2 : count < 30 ? 3 : 4;
 
-export function renderHeatmap(container, { kind, today, counts, overdue }, activate) {
+export type ClearCalendar = () => void;
+export type ActivateCalendar = (clear?: ClearCalendar) => void;
+
+export function renderHeatmap(container: HTMLElement, calendar: ReviewCalendar, activate: ActivateCalendar) {
+  const { kind, today, counts } = calendar;
   const isDue = kind === 'due';
   const doc = container.ownerDocument;
-  function el(tag, className, text) {
+  function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string) {
     const node = doc.createElement(tag);
     if (className) node.className = `flag-heatmap__${className}`;
     if (text !== undefined) node.textContent = text;
     return node;
   }
-  function button(text, className, label) {
+  function button(text: string, className: string, label?: string) {
     const node = el('button', className, text);
     node.type = 'button';
     if (label) node.setAttribute('aria-label', label);
     return node;
   }
-  function countLabel(day) {
+  function countLabel(day: number) {
     const count = counts.get(day) ?? 0;
-    if (!isDue) return `${count} ${count === 1 ? 'attempt' : 'attempts'}`;
+    if (calendar.kind === 'completed') return `${count} ${count === 1 ? 'attempt' : 'attempts'}`;
     const label = `${count} ${count === 1 ? 'card' : 'cards'} due`;
-    return day === today ? `${label} (${overdue} overdue)` : label;
+    return day === today ? `${label} (${calendar.overdue} overdue)` : label;
   }
 
   const root = el('section');
@@ -74,7 +79,7 @@ export function renderHeatmap(container, { kind, today, counts, overdue }, activ
   swatches.setAttribute('aria-hidden', 'true');
   for (const [index, label] of ['1–4', '5–14', '15–29', '30+'].entries()) {
     const swatch = el('span', 'swatch');
-    swatch.dataset.level = index + 1;
+    swatch.dataset.level = String(index + 1);
     swatch.title = label;
     swatches.append(swatch);
   }
@@ -85,36 +90,80 @@ export function renderHeatmap(container, { kind, today, counts, overdue }, activ
   todaySwatch.setAttribute('aria-hidden', 'true');
   todayKey.prepend(todaySwatch);
   legend.append(key, todayKey);
-  root.append(viewport, detail, legend);
+  const tooltip = el('div', 'tooltip');
+  tooltip.setAttribute('role', 'tooltip');
+  tooltip.hidden = true;
+  root.append(viewport, detail, legend, tooltip);
 
   // Put today in the last week of history and the first week of the schedule.
   const monday = today - (civilDate(today).getUTCDay() + 6) % 7;
   const home = isDue ? monday : monday - (WEEKS - 1) * 7;
-  const pageStart = day => home + Math.floor((day - home) / DAYS) * DAYS;
+  const pageStart = (day: number) => home + Math.floor((day - home) / DAYS) * DAYS;
   let edge = today;
   for (const day of counts.keys()) edge = isDue ? Math.max(edge, day) : Math.min(edge, day);
   const earliest = isDue ? today : pageStart(edge);
   const latest = isDue ? pageStart(edge) + DAYS - 1 : today;
-  const tiles = new Map();
+  const tiles = new Map<number, HTMLButtonElement>();
   let first = home;
   let active = today;
-  let hovered, focused, pinned;
+  let hovered: number | undefined;
+  let focused: number | undefined;
+  let pinned: number | undefined;
 
-  function showDetail() {
-    const day = hovered ?? focused ?? pinned ?? (first === home ? today : undefined);
-    detail.textContent = day === undefined ? ''
-      : `${day === today ? 'Today' : fullDate.format(civilDate(day))}: ${countLabel(day)}`;
+  function positionTooltip(day = hovered ?? focused ?? pinned) {
+    const tile = day === undefined ? undefined : tiles.get(day);
+    if (!tile || day === undefined) {
+      tooltip.hidden = true;
+      return;
+    }
+    const box = tile.getBoundingClientRect();
+    const view = viewport.getBoundingClientRect();
+    const left = Math.max(box.left, view.left);
+    const right = Math.min(box.right, view.right);
+    if (left >= right) {
+      tooltip.hidden = true;
+      return;
+    }
+    const date = fullDate.format(civilDate(day));
+    const count = counts.get(day) ?? 0;
+    const label = calendar.kind === 'completed' ? `${count} completed`
+      : `${count} due${day === today ? ` (${calendar.overdue} overdue)` : ''}`;
+    tooltip.textContent = `${date}: ${label}`;
+    tooltip.hidden = false;
+    const bounds = root.getBoundingClientRect();
+    const { width, height } = tooltip.getBoundingClientRect();
+    const gap = 5;
+    const middle = (left + right) / 2 - bounds.left;
+    tooltip.style.left = `${Math.max(0, Math.min(bounds.width - width, middle - width / 2))}px`;
+    const top = box.top >= height + gap ? box.top - gap - height : box.bottom + gap;
+    tooltip.style.top = `${top - bounds.top}px`;
   }
 
-  function setActive(day) {
+  viewport.addEventListener('scroll', () => positionTooltip());
+
+  function showDetail() {
+    const selected = hovered ?? focused ?? pinned;
+    const day = selected ?? (first === home ? today : undefined);
+    detail.textContent = day === undefined ? ''
+      : `${day === today ? 'Today' : fullDate.format(civilDate(day))}: ${countLabel(day)}`;
+    positionTooltip(selected);
+  }
+
+  function tileFor(day: number): HTMLButtonElement {
+    const tile = tiles.get(day);
+    if (!tile) throw new Error(`Calendar day ${day} is not rendered`);
+    return tile;
+  }
+
+  function setActive(day: number) {
     if (day === active) return;
-    tiles.get(active).tabIndex = -1;
-    tiles.get(day).tabIndex = 0;
+    tileFor(active).tabIndex = -1;
+    tileFor(day).tabIndex = 0;
     active = day;
   }
 
-  function reveal(tile) {
-    if (tile.parentElement.cellIndex === 1) {
+  function reveal(tile: HTMLButtonElement) {
+    if (tile.closest('td')?.cellIndex === 1) {
       viewport.scrollLeft = 0;
       return;
     }
@@ -125,7 +174,7 @@ export function renderHeatmap(container, { kind, today, counts, overdue }, activ
   }
 
   function clearPin() {
-    if (pinned !== undefined) tiles.get(pinned).setAttribute('aria-pressed', 'false');
+    if (pinned !== undefined) tiles.get(pinned)?.setAttribute('aria-pressed', 'false');
     pinned = undefined;
   }
 
@@ -140,7 +189,7 @@ export function renderHeatmap(container, { kind, today, counts, overdue }, activ
   });
   root.addEventListener('focusin', () => activate(clearDetail));
   root.addEventListener('focusout', event => {
-    if (!root.contains(event.relatedTarget)) clearDetail();
+    if (!(event.relatedTarget instanceof Node) || !root.contains(event.relatedTarget)) clearDetail();
   });
 
   function renderPage() {
@@ -148,7 +197,7 @@ export function renderHeatmap(container, { kind, today, counts, overdue }, activ
     const monthRow = el('tr');
     head.setAttribute('aria-hidden', 'true');
     monthRow.append(el('td', 'weekday'));
-    let month;
+    let month: number | undefined;
     for (let week = 0; week < WEEKS; week++) {
       const start = Math.max(first + week * 7, earliest);
       const end = Math.min(first + week * 7 + 6, latest);
@@ -175,14 +224,14 @@ export function renderHeatmap(container, { kind, today, counts, overdue }, activ
         const date = civilDate(day);
         const tile = button('', 'tile', `${fullDate.format(date)}: ${countLabel(day)}`);
         tile.dataset.date = date.toISOString().split('T')[0];
-        tile.dataset.level = level(counts.get(day) ?? 0);
+        tile.dataset.level = String(level(counts.get(day) ?? 0));
         tile.tabIndex = day === active ? 0 : -1;
         tile.setAttribute('aria-pressed', 'false');
         if (day === today) tile.setAttribute('aria-current', 'date');
         cell.append(tile);
         tiles.set(day, tile);
 
-        let pointerType;
+        let pointerType: string | undefined;
         tile.addEventListener('pointerdown', event => { pointerType = event.pointerType; });
         tile.addEventListener('pointerover', event => {
           if (event.pointerType === 'touch') return;
@@ -213,7 +262,7 @@ export function renderHeatmap(container, { kind, today, counts, overdue }, activ
           const toggleOff = pinned === day;
           clearPin();
           // Mouse details follow the pointer; tap or keyboard activation can pin a date.
-          if (!toggleOff && ((event.pointerType || pointerType) === 'touch' || event.detail === 0)) {
+          if (!toggleOff && ((('pointerType' in event && event.pointerType) || pointerType) === 'touch' || event.detail === 0)) {
             pinned = day;
             tile.setAttribute('aria-pressed', 'true');
           }
@@ -233,7 +282,7 @@ export function renderHeatmap(container, { kind, today, counts, overdue }, activ
     showDetail();
   }
 
-  function showDay(day, moveFocus = false) {
+  function showDay(day: number, moveFocus = false) {
     day = Math.min(latest, Math.max(earliest, day));
     if (day === active && moveFocus) return;
     const start = pageStart(day);
@@ -245,7 +294,7 @@ export function renderHeatmap(container, { kind, today, counts, overdue }, activ
     } else {
       setActive(day);
     }
-    const tile = tiles.get(day);
+    const tile = tileFor(day);
     if (moveFocus) {
       tile.focus({ preventScroll: true });
       hovered = undefined;
@@ -269,15 +318,16 @@ export function renderHeatmap(container, { kind, today, counts, overdue }, activ
     if (event.defaultPrevented || event.isComposing || event.altKey || event.metaKey || event.shiftKey) return;
     if (event.ctrlKey && !['Home', 'End'].includes(event.key)) return;
     const weekday = (active - first) % 7;
-    const moves = {
+    const moves: Partial<Record<string, number>> = {
       ArrowUp: active - 1, ArrowDown: active + 1, ArrowLeft: active - 7, ArrowRight: active + 7,
       Home: first + (event.ctrlKey ? 0 : weekday),
       End: first + (event.ctrlKey ? DAYS - 1 : DAYS - 7 + weekday),
       PageUp: active - DAYS, PageDown: active + DAYS,
     };
-    if (Object.hasOwn(moves, event.key)) {
+    const destination = Object.hasOwn(moves, event.key) ? moves[event.key] : undefined;
+    if (destination !== undefined) {
       event.preventDefault();
-      showDay(moves[event.key], true);
+      showDay(destination, true);
     } else if (event.key === 'Escape' && (pinned !== undefined || focused !== undefined || hovered !== undefined)) {
       event.preventDefault();
       clearDetail();
@@ -285,5 +335,5 @@ export function renderHeatmap(container, { kind, today, counts, overdue }, activ
   });
 
   renderPage();
-  reveal(tiles.get(today));
+  reveal(tileFor(today));
 }
