@@ -205,6 +205,27 @@ export const countries = Object.freeze(countryRows.map(([code, name, ...aliases]
   Object.freeze({ code, name, aliases: Object.freeze(aliases), flag: `assets/flags/${code.toLowerCase()}.svg` }),
 ));
 
+// UN M49 geographic groupings: https://unstats.un.org/unsd/methodology/m49/overview/
+// North America includes Central America and the Caribbean. The app also
+// includes Taiwan in Asia and Kosovo in Europe, independently of M49 listings.
+const continentGroups = [
+  ['africa', 'Africa', 'AO BF BI BJ BW CD CF CG CI CM CV DJ DZ EG ER ET GA GH GM GN GQ GW KE KM LR LS LY MA MG ML MR MU MW MZ NA NE NG RW SC SD SL SN SO SS ST SZ TD TG TN TZ UG ZA ZM ZW'],
+  ['asia', 'Asia', 'AE AF AM AZ BD BH BN BT CN CY GE ID IL IN IQ IR JO JP KG KH KP KR KW KZ LA LB LK MM MN MV MY NP OM PH PK PS QA SA SG SY TH TJ TL TM TR TW UZ VN YE'],
+  ['europe', 'Europe', 'AD AL AT BA BE BG BY CH CZ DE DK EE ES FI FR GB GR HR HU IE IS IT LI LT LU LV MC MD ME MK MT NL NO PL PT RO RS RU SE SI SK SM UA VA XK'],
+  ['north-america', 'North America', 'AG BB BS BZ CA CR CU DM DO GD GT HN HT JM KN LC MX NI PA SV TT US VC'],
+  ['oceania', 'Oceania', 'AU FJ FM KI MH NR NZ PG PW SB TO TV VU WS'],
+  ['south-america', 'South America', 'AR BO BR CL CO EC GY PE PY SR UY VE'],
+];
+export const regions = Object.freeze([['world', 'World'], ...continentGroups].map(([id, label]) =>
+  Object.freeze({ id, label }),
+));
+const byRegion = new Map([['world', countries]]);
+for (const [id, , codes] of continentGroups) {
+  const set = new Set(codes.split(' '));
+  byRegion.set(id, Object.freeze(countries.filter(country => set.has(country.code))));
+}
+export const countriesIn = region => byRegion.get(region) ?? countries;
+
 function normalize(text) {
   const folded = text.normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '');
   if (!/[\p{L}\p{N}]/u.test(folded)) return '';

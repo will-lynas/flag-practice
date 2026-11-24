@@ -79,16 +79,17 @@ export function knownCodes(state) {
 }
 
 // Sort oldest first; stable sort keeps enrollment order when due dates tie.
-export function getDue(state, now = new Date()) {
+export function getDue(state, now = new Date(), allowed) {
   return Object.entries(state.cards)
-    .filter(([, card]) => card.due <= now)
+    .filter(([code, card]) => (!allowed || allowed.has(code)) && card.due <= now)
     .sort(([, a], [, b]) => a.due - b.due)
     .map(([code]) => code);
 }
 
-export function nextDue(state) {
+export function nextDue(state, allowed) {
   let earliest = null;
-  for (const { due } of Object.values(state.cards)) {
+  for (const [code, { due }] of Object.entries(state.cards)) {
+    if (allowed && !allowed.has(code)) continue;
     if (earliest === null || due < earliest) earliest = due;
   }
   return earliest === null ? null : new Date(earliest);
