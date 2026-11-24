@@ -17,12 +17,9 @@ function readPending() {
   if (!raw) return null;
   let value;
   try { value = JSON.parse(raw); } catch { return null; }
-  if (!Array.isArray(value?.codes) || value.codes.length > 5 || new Set(value.codes).size !== value.codes.length ||
-      !Number.isInteger(value.revealed) || value.revealed < 0 || value.revealed > value.codes.length) return null;
-  return {
-    codes: value.codes.filter(code => byCode.has(code)),
-    revealed: value.codes.slice(0, value.revealed).filter(code => byCode.has(code)).length,
-  };
+  if (!Array.isArray(value?.codes) || value.codes.length > 5 || new Set(value.codes).size !== value.codes.length) return null;
+  // Legacy batches also have a teaching cursor; only saved grades mark completion.
+  return { codes: value.codes.filter(code => byCode.has(code)) };
 }
 
 function setPending(value) {
@@ -124,7 +121,7 @@ function showIdle(focus, now) {
     content.push(retryRow(button(label, () => {
       const now = new Date();
       if (getDue(state, now).some(code => byCode.has(code))) return showNext();
-      const batch = { codes: unseen.slice(0, count), revealed: 0 };
+      const batch = { codes: unseen.slice(0, count) };
       function start() {
         try { setPending(batch); } catch { return storageError(start); }
         showNext();
@@ -138,19 +135,6 @@ function showIdle(focus, now) {
     if (+new Date() >= +due) refreshIdle();
     else showIdle(false, new Date());
   }, Math.min(due - now + 10, 2 ** 31 - 1));
-}
-
-function showTeaching(country, focus) {
-  function advance() {
-    try { setPending({ ...pending, revealed: pending.revealed + 1 }); }
-    catch { return storageError(advance); }
-    showNext();
-  }
-  const next = button('Continue', advance);
-  const tray = flagTray(country, true, [next]);
-  const heading = mount('teach', country.name, `Learn ${pending.revealed + 1} of ${pending.codes.length}`, tray, retryRow(next));
-  next.setAttribute('aria-describedby', heading.id);
-  if (focus) next.focus();
 }
 
 function showFeedback(country, stage, answer, correct) {
@@ -325,14 +309,13 @@ function showNext(focus = true) {
   const due = getDue(state, now).filter(code => byCode.has(code) && !newCodes.has(code));
   if (due.length) return showRecall(byCode.get(due[0]), `Review · ${due.length} due`, focus);
   if (newCodes.size) {
-    // Save the UI batch before adding it so a reload can resume ungraded teaching.
+    // Save the UI batch before adding it so a reload can resume ungraded flags.
     const known = new Set(knownCodes(state));
     const missing = [...newCodes].filter(code => !known.has(code));
     if (missing.length) {
       try { saveState(addFive(state, missing, now)); }
       catch { return storageError(() => showNext()); }
     }
-    if (pending.revealed < pending.codes.length) return showTeaching(byCode.get(pending.codes[pending.revealed]), focus);
     const code = newCodes.values().next().value;
     return showRecall(byCode.get(code), `New flags · ${pending.codes.length - newCodes.size + 1} of ${pending.codes.length}`, focus);
   }

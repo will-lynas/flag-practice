@@ -3,12 +3,11 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
+import { addFive, grade } from '../src/engine.js';
 
 const progressKey = 'flag-trainer:progress:v1';
-const firstFive = [
-  ['us', 'United States'], ['gb', 'United Kingdom'], ['ca', 'Canada'],
-  ['jp', 'Japan'], ['fr', 'France'],
-];
+const pendingKey = 'flag-trainer.ui.pending.v1';
+const firstFive = ['US', 'GB', 'CA', 'JP', 'FR'];
 const base = process.env.FLAG_TEST_URL;
 const types = { html: 'text/html', js: 'text/javascript', css: 'text/css', svg: 'image/svg+xml' };
 let browser, server, url;
@@ -68,36 +67,27 @@ async function flag(page, code, alt) {
   }, code);
 }
 
-async function teach(page, reload = false) {
-  await button(page, 'Learn 5 flags').click();
-  for (const [i, [code, name]] of firstFive.entries()) {
-    await heading(page, name);
-    await flag(page, code, `Flag of ${name}`);
-    assert.equal(await page.getByRole('combobox').count(), 0);
-    if (i === 1 && reload) {
-      await page.reload();
-      await heading(page, name);
-      await flag(page, code, `Flag of ${name}`);
-    }
-    await page.keyboard.press('Enter');
-  }
-}
-
 async function recall(page, code) {
   await heading(page, 'Which country uses this flag?');
   await flag(page, code, 'Flag to identify');
+  assert.equal(await page.getByRole('option').count(), 0);
+  assert.equal(await button(page, 'Continue').count(), 0);
   const input = page.getByRole('combobox', { name: 'Country' });
+  assert.equal(await input.inputValue(), '');
   assert.equal(await input.evaluate(el => document.activeElement === el), true);
   return input;
 }
 
-test('teaches the real first five, resumes on reload, accepts keyboard autocomplete and keeps FSRS history', async t => {
+test('guesses the first five without revealing answers, resumes on reload, and keeps FSRS history', async t => {
   const page = await open(t);
-  // Let the real scheduler and browser run, but prevent animation/time-zone and
-  // wall-clock delays from accidentally making an incorrect card due mid-batch.
+  // Keep incorrect cards from becoming due mid-batch while the browser runs.
   await page.clock.setFixedTime(new Date('2026-05-03T12:00:00Z'));
-  await teach(page, true);
+  await button(page, 'Learn 5 flags').click();
   let input = await recall(page, 'us');
+  const beforeFirstGuess = await stored(page);
+  await page.reload();
+  input = await recall(page, 'us');
+  assert.equal(await stored(page), beforeFirstGuess);
   await input.fill('United');
   await page.getByRole('option', { name: 'United States', exact: true }).waitFor();
   await input.press('Enter');
@@ -110,8 +100,10 @@ test('teaches the real first five, resumes on reload, accepts keyboard autocompl
   await input.press('Escape');
   assert.equal(await input.getAttribute('aria-expanded'), 'false');
   await input.press('ArrowDown');
-  await input.press('Enter');
+  await page.keyboard.down('Enter');
   await heading(page, 'Correct: United States');
+  await page.keyboard.down('Enter'); // An auto-repeat cannot activate the focused Next button.
+  await page.keyboard.up('Enter');
   await flag(page, 'us', 'Flag of United States');
   const afterOne = await stored(page);
   await page.reload();
@@ -130,6 +122,11 @@ test('teaches the real first five, resumes on reload, accepts keyboard autocompl
   await button(page, 'Don’t know').focus();
   await page.keyboard.press('Enter');
   await heading(page, 'Skipped: Japan');
+  await flag(page, 'jp', 'Flag of Japan');
+  const afterSkip = JSON.parse(await stored(page));
+  assert.equal(afterSkip.reviewLog.length, 4);
+  // Both fresh cards were graded at the same instant: Skip must match a wrong guess.
+  assert.deepEqual(afterSkip.cards.JP, afterSkip.cards.GB);
   await page.keyboard.press('Enter');
   input = await recall(page, 'fr');
   await input.fill('France');
@@ -140,13 +137,16 @@ test('teaches the real first five, resumes on reload, accepts keyboard autocompl
   await button(page, 'Learn 5 more').waitFor();
   const finished = await stored(page);
   const { cards, reviewLog } = JSON.parse(finished);
-  assert.deepEqual(Object.keys(cards), firstFive.map(([code]) => code.toUpperCase()));
+  assert.deepEqual(Object.keys(cards), firstFive);
   assert.equal(reviewLog.length, 5);
   assert.ok(Date.parse(cards.GB.due) < Date.parse(cards.US.due));
   assert.equal(await page.getByRole('link', { name: /stats|regions/i }).count(), 0);
   await page.reload();
   await heading(page, 'No reviews due');
   assert.equal(await stored(page), finished);
+  await button(page, 'Learn 5 more').click();
+  await recall(page, 'de');
+  assert.equal(await page.locator('.stage').textContent(), 'New flags · 1 of 5');
   await page.clock.setFixedTime(new Date(cards.GB.due));
   await page.reload();
   await recall(page, 'gb');
@@ -155,7 +155,7 @@ test('teaches the real first five, resumes on reload, accepts keyboard autocompl
 
 test('submits an exact normalized country code without needing a suggestion', async t => {
   const page = await open(t);
-  await teach(page);
+  await button(page, 'Learn 5 flags').click();
   const input = await recall(page, 'us');
   await input.fill('U.S.');
   await input.press('Enter');
@@ -164,7 +164,7 @@ test('submits an exact normalized country code without needing a suggestion', as
 
 test('a failed progress write does not advance or double-count a review on retry', { skip: !!base }, async t => {
   const page = await open(t);
-  await teach(page);
+  await button(page, 'Learn 5 flags').click();
   const input = await recall(page, 'us');
   const before = await stored(page);
   await page.evaluate(key => {
@@ -188,23 +188,48 @@ test('a failed progress write does not advance or double-count a review on retry
   assert.equal(JSON.parse(await stored(page)).reviewLog.length, 1);
 });
 
-test('reload resumes from saved grades even if the new-batch cursor write is interrupted', { skip: !!base }, async t => {
+test('reload resumes from saved grades without writing a separate batch cursor', { skip: !!base }, async t => {
   const page = await open(t);
-  await teach(page);
+  await button(page, 'Learn 5 flags').click();
   const input = await recall(page, 'us');
-  await page.evaluate(() => {
+  await page.evaluate(key => {
     const setItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function (name, value) {
-      if (name === 'flag-trainer.ui.pending.v1') throw new DOMException('Test write refusal', 'QuotaExceededError');
+      if (name === key) throw new DOMException('Test write refusal', 'QuotaExceededError');
       return setItem.call(this, name, value);
     };
-  });
+  }, pendingKey);
   await input.fill('United States');
   await input.press('Enter');
   await heading(page, 'Correct: United States');
   assert.equal(JSON.parse(await stored(page)).reviewLog.length, 1);
   await page.reload();
   await recall(page, 'gb');
+});
+
+test('an in-flight teaching batch resumes as guesses after due reviews, preserving saved progress', async t => {
+  const page = await open(t);
+  const now = new Date('2026-05-03T12:00:00Z');
+  const earlier = new Date('2026-05-02T12:00:00Z');
+  await page.clock.setFixedTime(now);
+  const batch = { codes: firstFive, revealed: 1 };
+  const enrolled = addFive({ version: 1, cards: {} }, batch.codes, now);
+  const withReview = addFive(enrolled, ['DE'], earlier);
+  const bytes = JSON.stringify(grade(withReview, 'DE', false, earlier));
+  await page.evaluate(entries => {
+    for (const [key, value] of entries) localStorage.setItem(key, value);
+  }, [[progressKey, bytes], [pendingKey, JSON.stringify(batch)]]);
+  await page.reload();
+  const input = await recall(page, 'de');
+  assert.equal(await stored(page), bytes);
+  await input.fill('Germany');
+  await input.press('Enter');
+  await heading(page, 'Correct: Germany');
+  await button(page, 'Next').click();
+  await recall(page, 'us');
+  assert.equal(await page.locator('.stage').textContent(), 'New flags · 1 of 5');
+  assert.deepEqual(JSON.parse(await stored(page)).reviewLog, [earlier.toISOString(), now.toISOString()]);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), pendingKey), JSON.stringify(batch));
 });
 
 test('refuses to start over when progress was written by a newer version', { skip: !!base }, async t => {
