@@ -167,6 +167,7 @@ function showRecall(country, stage, focus) {
   input.id = 'country';
   input.placeholder = 'Country name';
   input.autocomplete = 'off';
+  input.setAttribute('data-1p-ignore', '');
   input.spellcheck = false;
   input.setAttribute('autocorrect', 'off');
   input.setAttribute('autocapitalize', 'none');
@@ -278,7 +279,7 @@ function showRecall(country, stage, focus) {
       event.preventDefault();
       if (!event.repeat) {
         if (active >= 0) choose(matches[active]);
-        else submitAnswer();
+        else submitAnswer(!list.hidden && matches.length === 1 ? matches[0] : undefined);
       }
     } else if (event.key === 'Escape' && !list.hidden) {
       event.preventDefault();
@@ -286,9 +287,9 @@ function showRecall(country, stage, focus) {
     }
   });
 
-  function submitAnswer() {
+  function submitAnswer(visibleFallback) {
     if (composing || submit.disabled) return;
-    const chosen = resolveCountry(input.value);
+    const chosen = resolveCountry(input.value) ?? visibleFallback;
     if (chosen) return record(country, stage, chosen.code);
     input.focus();
     if (list.hidden) suggest();
