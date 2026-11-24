@@ -112,6 +112,8 @@ button.secondary:hover { background: var(--tray); }
 button:disabled { opacity: .55; cursor: default; }
 .answer-action { min-inline-size: 5.5rem; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* The screen heading receives programmatic focus for announcements, not Tab. */
+#screen-title:focus { outline: none; }
 
 .country-control { position: relative; }
 #country {
