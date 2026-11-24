@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 import { addFive, grade } from '../src/engine.js';
+import { regionTests } from './regions.browser.js';
 
 const progressKey = 'flag-trainer:progress:v1';
 const pendingKey = 'flag-trainer.ui.pending.v1';
@@ -41,8 +42,8 @@ test.after(async () => {
   if (server) await new Promise(resolve => server.close(resolve));
 });
 
-async function open(t) {
-  const context = await browser.newContext();
+async function open(t, contextOptions) {
+  const context = await browser.newContext(contextOptions);
   t.after(() => context.close());
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
@@ -72,8 +73,8 @@ async function recall(page, code) {
   await heading(page, 'Which country uses this flag?');
   await flag(page, code, 'Flag to identify');
   const answer = firstFiveNames[firstFive.indexOf(code.toUpperCase())];
-  if (answer) assert.equal(await page.getByText(answer, { exact: true }).count(), 0);
-  assert.equal(await page.getByRole('option').count(), 0);
+  if (answer) assert.equal(await page.locator('main').getByText(answer, { exact: true }).count(), 0);
+  assert.equal(await page.locator('#country-options [role=option]').count(), 0);
   assert.equal(await button(page, 'Continue').count(), 0);
   const input = page.getByRole('combobox', { name: 'Country' });
   assert.equal(await input.inputValue(), '');
@@ -149,7 +150,7 @@ test('guesses the first five without revealing answers, resumes on reload, and k
   assert.equal(await stored(page), finished);
   await button(page, 'Learn 5 more').click();
   await recall(page, 'de');
-  assert.equal(await page.locator('.stage').textContent(), 'New flags · 1 of 5');
+  assert.equal(await page.locator('.stage').textContent(), 'New · 5 remaining');
   await page.clock.setFixedTime(new Date(cards.GB.due));
   await page.reload();
   await recall(page, 'gb');
@@ -160,7 +161,7 @@ test('Enter submits the only visible partial match without highlighting it', asy
   const page = await open(t);
   await button(page, 'Learn 5 flags').click();
   const input = await recall(page, 'us');
-  const options = page.getByRole('option');
+  const options = page.locator('#country-options').getByRole('option');
   for (const value of ['', 'zzzzzz']) {
     await input.fill(value);
     await input.press('Enter');
@@ -301,7 +302,7 @@ test('an in-flight teaching batch resumes as guesses after due reviews, preservi
   await heading(page, 'Correct: Germany');
   await button(page, 'Next').click();
   await recall(page, 'us');
-  assert.equal(await page.locator('.stage').textContent(), 'New flags · 1 of 5');
+  assert.equal(await page.locator('.stage').textContent(), 'New · 5 remaining');
   assert.deepEqual(JSON.parse(await stored(page)).reviewLog, [earlier.toISOString(), now.toISOString()]);
   assert.equal(await page.evaluate(key => localStorage.getItem(key), pendingKey), JSON.stringify(batch));
 });
@@ -330,3 +331,5 @@ test('refuses to start over when progress was written by a newer version', { ski
   assert.equal(await stored(page), bytes);
   assert.equal(await button(page, 'Learn 5 flags').count(), 0);
 });
+
+regionTests(test, { open, heading, button, flag, recall, stored });

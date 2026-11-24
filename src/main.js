@@ -1,16 +1,17 @@
-import { loadProgress, saveProgress, getDue, nextDue, addFive, grade, knownCodes } from './engine.js';
-import { countries, resolveCountry, searchCountries } from './countries.js';
+import { loadProgress, saveProgress, getDue, nextDue, addFive, grade } from './engine.js';
+import { countries, countriesIn, regions, resolveCountry, searchCountries } from './countries.js';
 
 const app = document.querySelector('#trainer');
 const byCode = new Map(countries.map(country => [country.code, country]));
-const codes = [...byCode.keys()];
 const pendingKey = 'flag-trainer.ui.pending.v1';
+const regionKey = 'flag-trainer.ui.region';
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 let state;
-let pending;
 let screen;
 let wakeTimer;
+let region = 'world';
+let inScope = new Set(byCode.keys());
 
 function readPending() {
   const raw = localStorage.getItem(pendingKey);
@@ -20,11 +21,6 @@ function readPending() {
   if (!Array.isArray(value?.codes) || value.codes.length > 5 || new Set(value.codes).size !== value.codes.length) return null;
   // Legacy batches also have a teaching cursor; only saved grades mark completion.
   return { codes: value.codes.filter(code => byCode.has(code)) };
-}
-
-function setPending(value) {
-  localStorage.setItem(pendingKey, JSON.stringify(value));
-  pending = value;
 }
 
 function saveState(value) {
@@ -38,6 +34,31 @@ function element(tag, text, className) {
   if (className) node.className = className;
   return node;
 }
+
+const picker = element('select', '', 'region-picker');
+picker.setAttribute('aria-label', 'Region');
+for (const { id, label } of regions) picker.add(new Option(label, id));
+document.querySelector('.site-header').append(picker);
+
+function selectRegion(id) {
+  region = regions.some(item => item.id === id) ? id : 'world';
+  picker.value = region;
+  inScope = new Set(countriesIn(region).map(country => country.code));
+}
+
+picker.addEventListener('change', () => {
+  const selected = picker.value;
+  function apply() {
+    try { localStorage.setItem(regionKey, selected); }
+    catch {
+      picker.value = region;
+      return storageError(apply);
+    }
+    selectRegion(selected);
+    renderView(false);
+  }
+  apply();
+});
 
 function button(label, action, className) {
   const node = element('button', label, className);
@@ -103,10 +124,10 @@ function flagTray(country, revealed, controls = []) {
 }
 
 function showIdle(focus, now) {
-  const known = new Set(knownCodes(state));
-  const unseen = codes.filter(code => !known.has(code));
+  const unseen = [...inScope].filter(code => !Object.hasOwn(state.cards, code));
+  const started = unseen.length < inScope.size;
   const count = Math.min(5, unseen.length);
-  const due = nextDue(state);
+  const due = nextDue(state, inScope);
   const upcoming = due instanceof Date && due > now;
   const content = [];
   if (upcoming) {
@@ -117,19 +138,18 @@ function showIdle(focus, now) {
     content.push(detail);
   }
   if (count) {
-    const label = !known.size ? `Learn ${count} ${count === 1 ? 'flag' : 'flags'}` : `Learn ${count} more`;
+    const label = !started ? `Learn ${count} ${count === 1 ? 'flag' : 'flags'}` : `Learn ${count} more`;
     content.push(retryRow(button(label, () => {
-      const now = new Date();
-      if (getDue(state, now).some(code => byCode.has(code))) return showNext();
-      const batch = { codes: unseen.slice(0, count) };
       function start() {
-        try { setPending(batch); } catch { return storageError(start); }
+        const now = new Date();
+        if (getDue(state, now, inScope).length) return showNext();
+        try { saveState(addFive(state, unseen, now)); } catch { return storageError(start); }
         showNext();
       }
       start();
     })));
   }
-  const heading = mount('idle', !known.size && count ? 'Start learning' : 'No reviews due', '', ...content);
+  const heading = mount('idle', !started && count ? 'Start learning' : 'No reviews due', '', ...content);
   if (focus) focusHeading(heading);
   if (upcoming) wakeTimer = setTimeout(() => {
     if (+new Date() >= +due) refreshIdle();
@@ -304,31 +324,34 @@ function showRecall(country, stage, focus) {
 
 function showNext(focus = true) {
   const now = new Date();
-  // The durable FSRS grade is also the batch completion record. A separate
-  // answer cursor could otherwise lag behind a saved grade after a reload.
-  const newCodes = new Set(pending?.codes.filter(code => !state.cards[code]?.last_review));
-  const due = getDue(state, now).filter(code => byCode.has(code) && !newCodes.has(code));
-  if (due.length) return showRecall(byCode.get(due[0]), `Review · ${due.length} due`, focus);
-  if (newCodes.size) {
-    // Save the UI batch before adding it so a reload can resume ungraded flags.
-    const known = new Set(knownCodes(state));
-    const missing = [...newCodes].filter(code => !known.has(code));
-    if (missing.length) {
-      try { saveState(addFive(state, missing, now)); }
-      catch { return storageError(() => showNext()); }
-    }
-    const code = newCodes.values().next().value;
-    return showRecall(byCode.get(code), `New flags · ${pending.codes.length - newCodes.size + 1} of ${pending.codes.length}`, focus);
-  }
+  const due = getDue(state, now, inScope);
+  const reviews = due.filter(code => state.cards[code].last_review);
+  if (reviews.length) return showRecall(byCode.get(reviews[0]), `Review · ${reviews.length} due`, focus);
+  // Ungraded FSRS cards are the durable queue; no separate cursor can drift.
+  if (due.length) return showRecall(byCode.get(due[0]), `New · ${due.length} remaining`, focus);
   showIdle(focus, now);
 }
 
-function init(focus = true) {
-  try {
-    state = loadProgress({ strict: true });
-    pending = readPending();
-  } catch { return storageError(() => init(true), true); }
+function renderView(focus) {
+  if (!state) return init(focus);
   showNext(focus);
+}
+
+function init(focus = true) {
+  let legacy;
+  try {
+    selectRegion(localStorage.getItem(regionKey));
+    state = undefined;
+    state = loadProgress({ strict: true });
+    legacy = readPending();
+  } catch { return storageError(() => init(true), true); }
+  // v1 could persist the batch just before its enrollment write.
+  const restored = addFive(state, legacy?.codes ?? []);
+  if (restored !== state) {
+    try { saveState(restored); }
+    catch { state = undefined; return storageError(() => init(true)); }
+  }
+  renderView(focus);
 }
 
 function plainKey(event) {
@@ -341,7 +364,9 @@ app.addEventListener('keydown', event => {
 });
 
 function refreshIdle() {
-  if (screen === 'idle' && getDue(state).some(code => byCode.has(code))) showNext();
+  if (screen === 'idle' && getDue(state, new Date(), inScope).length) {
+    showNext(document.activeElement !== picker);
+  }
 }
 
 window.addEventListener('focus', refreshIdle);
