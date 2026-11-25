@@ -1,7 +1,9 @@
 # Flag Practice
 
-Learn to identify country flags with spaced repetition at [flags.lynas.dev](https://flags.lynas.dev/).
+Learn to recognise country flags with spaced repetition.
 
-Use Node.js 26. Run `npm ci --ignore-scripts`, `npm test`, then `npm run build` to type-check the TypeScript and produce the static site in `dist/`. With Google Chrome installed, run `npm run test:browser` against that build; run `FLAG_TEST_URL=https://flags.lynas.dev/ npm run test:browser` to test production instead.
+[Play](https://flags.lynas.dev/)
+
+![A flag quiz with the United States flag and a country-name answer field](docs/screenshot.png)
 
 [Third-party attributions](ATTRIBUTIONS.md)
