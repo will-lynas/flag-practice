@@ -11,6 +11,7 @@ import { createEmptyCard, fsrs, Rating, State } from 'ts-fsrs';
 import { addFive, grade } from '../src/engine.ts';
 import { regionTests } from './regions.browser.ts';
 import { statsTests } from './stats.browser.ts';
+import { progressBarsTests } from './progress-bars.browser.ts';
 
 declare global {
   interface Window {
@@ -532,3 +533,4 @@ export type BrowserHarness = {
 
 regionTests(test, { open, heading, button, flag, recall, stored });
 statsTests(test, { open, heading, stored, statsUrl: () => new URL('/stats', url).href });
+progressBarsTests(test, { open, stored, statsUrl: () => new URL('/stats', url).href });

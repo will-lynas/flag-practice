@@ -36,8 +36,47 @@ function rowWithHeading(body: HTMLTableSectionElement, name: string) {
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
+const progressStages = [...statuses].reverse();
+
+function progressBreakdown({ counts, total, breakdown }: ReturnType<typeof getStats>) {
+  const section = element('section', null, 'stats-progress');
+  const heading = element('h3', 'Progress breakdown');
+  heading.id = 'stats-progress-title';
+  section.setAttribute('aria-labelledby', heading.id);
+  const continents = element('div', null, 'stats-progress__continents');
+
+  for (const scope of [{ id: 'world', label: 'World', counts, total }, ...breakdown]) {
+    const row = element('section', null, 'stats-progress__scope');
+    const label = element('h4', scope.label);
+    label.id = `stats-progress-${scope.id}`;
+    row.setAttribute('aria-labelledby', label.id);
+    const bar = element('div', null, 'stats-progress__bar');
+    bar.setAttribute('aria-hidden', 'true');
+    const values = element('p', null, 'stats-progress__counts');
+    for (const status of progressStages) {
+      const count = scope.counts[status];
+      if (count > 0) {
+        const segment = element('span', null, 'stats-progress__segment');
+        segment.dataset.status = status;
+        segment.style.inlineSize = `${100 * count / scope.total}%`;
+        bar.append(segment);
+      }
+      const value = element('span');
+      value.append(element('strong', count), ` ${status}`);
+      values.append(value);
+    }
+    row.append(label, bar, values);
+    if (scope.id === 'world') section.append(heading, row);
+    else continents.append(row);
+  }
+  section.append(continents);
+  return section;
+}
+
 export function renderStats(state: Progress, region: Region, now = new Date()) {
-  const { rows, counts, total, dueNow, breakdown } = getStats(state, region, now);
+  const scoped = getStats(state, region, now);
+  const { rows, counts, total, dueNow, breakdown } = scoped;
+  const overview = progressBreakdown(region === 'world' ? scoped : getStats(state, 'world', now));
   const summary = element('dl', null, 'stats-summary');
   const metrics: (readonly [string, number])[] = [['Total', total], ...statuses.map(status => [status, counts[status]] as const), ['Due now', dueNow]];
   for (const [label, value] of metrics) {
@@ -80,7 +119,7 @@ export function renderStats(state: Progress, region: Region, now = new Date()) {
     } else next.textContent = '—';
   }
   const content = element('div', null, 'stats-content');
-  content.append(summary, calendars);
+  content.append(overview, summary, calendars);
   if (region === 'world') content.append(regional.node);
   content.append(countries.node);
   return { content, renderCalendar: () => {

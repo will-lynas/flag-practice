@@ -20,6 +20,56 @@
 }
 
 .stats-content { display: grid; gap: 1.65rem; margin-block-start: 1.2rem; min-inline-size: 0; }
+
+/* The rest of the app remains light; Stats follows the system palette. */
+@media (prefers-color-scheme: dark) {
+  :root:has(#trainer[data-screen='stats']) {
+    color-scheme: dark;
+    color: #e7ede8;
+    background: #19221e;
+    --muted: #abbab0;
+    --rule: #3b4a42;
+    --tray: #29372f;
+    --accent: #a7d3b9;
+    --focus: #9bcde3;
+    --correct: #9ad0ae;
+  }
+}
+
+.stats-progress {
+  --progress-idle: light-dark(#dae2db, #3e4c44);
+  --progress-learning: light-dark(#6488a6, #799fc1);
+  --progress-learnt: light-dark(#36745a, #a0cbae);
+  display: grid;
+  gap: .7rem;
+  min-inline-size: 0;
+  padding-block-end: .9rem;
+  border-block-end: 1px solid var(--rule);
+}
+.stats-progress h3 { margin: 0; font-size: 1rem; font-weight: 700; }
+.stats-progress h4 { margin: 0; font-size: .875rem; font-weight: 650; }
+.stats-progress > .stats-progress__scope h4 { font-size: 1rem; }
+.stats-progress__continents {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: .65rem 1.1rem;
+}
+.stats-progress__scope { display: grid; gap: .25rem; }
+.stats-progress__bar { display: flex; block-size: .5rem; overflow: hidden; border-radius: 999px; }
+.stats-progress > .stats-progress__scope .stats-progress__bar { block-size: .75rem; }
+.stats-progress__segment { background: var(--progress-idle); }
+.stats-progress__segment[data-status='Learning'] { background: var(--progress-learning); }
+.stats-progress__segment[data-status='Learnt'] { background: var(--progress-learnt); }
+.stats-progress__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .15rem .65rem;
+  font-size: .75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.stats-progress__counts strong { color: inherit; font-weight: 700; }
+
 .stats-summary {
   display: flex;
   flex-wrap: wrap;
